@@ -21,7 +21,7 @@ desktop = ["web", "dep:tauri"]
 anyhow = "1"
 axum = { version = "0.8", optional = true }
 ctrlc = "3"
-curve25519-dalek = "4"
+curve25519-dalek = "5"
 futures-util = { version = "0.3", optional = true }
 hmac = { version = "0.12", optional = true }
 rand = "0.9"
