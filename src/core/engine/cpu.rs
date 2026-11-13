@@ -18,8 +18,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc::Sender, Arc};
 use std::thread;
 
-const BATCH_SIZE: usize = 128;
-const TELEMETRY_FLUSH_BATCHES: usize = 128; // 128 * 128 = 16,384 keys per atomic add
+const STREAMS: usize = 4;
+const BATCH_PER_STREAM: usize = 64;
+const BATCH_SIZE: usize = STREAMS * BATCH_PER_STREAM;
+const TELEMETRY_FLUSH_BATCHES: usize = 64; // 64 * 256 = 16,384 keys per atomic add
 const RESEED_STEPS: u64 = 1 << 24;
 
 pub(crate) const LABEL: &str = "CPU";
@@ -88,20 +90,32 @@ fn worker_loop(
     let mut local_hashes: u64 = 0;
     let mut batch_count: usize = 0;
 
+    let mut needed_chars = (local_best + 1).min(target_len);
+    let (mut mask64, mut expected64) = matcher.fast_mask_u64(needed_chars);
+
+    let mut seeds = [[0u8; 32]; STREAMS];
+    let mut base_scalars = [Scalar::ZERO; STREAMS];
+    let mut currents = [ExtPoint {
+        x: Fe::ZERO,
+        y: Fe::ZERO,
+        z: Fe::ZERO,
+        t: Fe::ZERO,
+    }; STREAMS];
+
     while !cancel.load(Ordering::Relaxed) && local_best < target_len {
-        let mut seed = [0u8; 32];
-        rng.fill_bytes(&mut seed);
+        for s in 0..STREAMS {
+            rng.fill_bytes(&mut seeds[s]);
+            let hash = Sha512::digest(seeds[s]);
+            let mut base_scalar_bytes = [0u8; 32];
+            base_scalar_bytes.copy_from_slice(&hash[..32]);
+            base_scalar_bytes[0] &= 248;
+            base_scalar_bytes[31] &= 127;
+            base_scalar_bytes[31] |= 64;
 
-        let hash = Sha512::digest(seed);
-        let mut base_scalar_bytes = [0u8; 32];
-        base_scalar_bytes.copy_from_slice(&hash[..32]);
-        base_scalar_bytes[0] &= 248;
-        base_scalar_bytes[31] &= 127;
-        base_scalar_bytes[31] |= 64;
-
-        let base_scalar = Scalar::from_bytes_mod_order(base_scalar_bytes);
-        let start_dalek = ED25519_BASEPOINT_POINT * base_scalar;
-        let mut current = ExtPoint::from_dalek(&start_dalek);
+            base_scalars[s] = Scalar::from_bytes_mod_order(base_scalar_bytes);
+            let start_dalek = ED25519_BASEPOINT_POINT * base_scalars[s];
+            currents[s] = ExtPoint::from_dalek(&start_dalek);
+        }
         let mut step_index: u64 = 0;
 
         while step_index < RESEED_STEPS
@@ -109,13 +123,17 @@ fn worker_loop(
             && local_best < target_len
         {
             let batch_start_step = step_index;
-            for i in 0..BATCH_SIZE {
-                xs[i] = current.x;
-                ys[i] = current.y;
-                zs[i] = current.z;
-                current = current.add_cached(&step_cached);
+            for k in 0..BATCH_PER_STREAM {
+                let base_idx = k * STREAMS;
+                for (s, current) in currents.iter_mut().enumerate() {
+                    let idx = base_idx + s;
+                    xs[idx] = current.x;
+                    ys[idx] = current.y;
+                    zs[idx] = current.z;
+                    *current = current.add_cached(&step_cached);
+                }
             }
-            step_index += BATCH_SIZE as u64;
+            step_index += BATCH_PER_STREAM as u64;
 
             // Montgomery's trick: invert all BATCH_SIZE Z coordinates with 1 field inversion.
             prod[0] = zs[0];
@@ -133,13 +151,13 @@ fn worker_loop(
                     zi
                 };
 
-                // Compute affine y = Y * Z^-1. Bit 255 (sign of x) is only needed for
-                // prefixes >= 51 chars, so we skip computing x unless needed.
+                // Compute affine y = Y * Z^-1 and check up to 12 prefix chars via a single u64 mask.
                 let y_affine = Fe::mul(&ys[i], &z_inv);
-                let mut pubkey = y_affine.to_bytes();
+                if (y_affine.first_u64_be() & mask64) != expected64 {
+                    continue;
+                }
 
-                // Fast prefix check on y_bytes (first 50 chars don't depend on sign bit).
-                // If target_len >= 51 or matched >= 50, compute exact sign bit too.
+                let mut pubkey = y_affine.to_bytes();
                 let mut matched = matcher.matched_len(&pubkey);
                 if matched > local_best || matched >= 50 {
                     let x_affine = Fe::mul(&xs[i], &z_inv);
@@ -159,9 +177,15 @@ fn worker_loop(
                         let full_matched = matcher.matched_len_hostname(&address);
                         if full_matched > global_best {
                             local_best = full_matched;
-                            let exact_step = batch_start_step + (i as u64);
-                            let scalar = base_scalar + Scalar::from(exact_step.wrapping_mul(8));
-                            let expanded_secret = derive_expanded_secret(&seed, exact_step, &scalar);
+                            needed_chars = (local_best + 1).min(target_len);
+                            (mask64, expected64) = matcher.fast_mask_u64(needed_chars);
+
+                            let s = i % STREAMS;
+                            let k = i / STREAMS;
+                            let exact_step = batch_start_step + (k as u64);
+                            let scalar = base_scalars[s] + Scalar::from(exact_step.wrapping_mul(8));
+                            let expanded_secret =
+                                derive_expanded_secret(&seeds[s], exact_step, &scalar);
 
                             let kp = OnionKeypair {
                                 address,
@@ -174,9 +198,13 @@ fn worker_loop(
                             });
                         } else if global_best > local_best {
                             local_best = global_best;
+                            needed_chars = (local_best + 1).min(target_len);
+                            (mask64, expected64) = matcher.fast_mask_u64(needed_chars);
                         }
                     } else {
                         local_best = global_best;
+                        needed_chars = (local_best + 1).min(target_len);
+                        (mask64, expected64) = matcher.fast_mask_u64(needed_chars);
                     }
                 }
             }
@@ -193,6 +221,8 @@ fn worker_loop(
                 let global_best = telemetry.global_best_len.load(Ordering::Relaxed) as usize;
                 if global_best > local_best {
                     local_best = global_best;
+                    needed_chars = (local_best + 1).min(target_len);
+                    (mask64, expected64) = matcher.fast_mask_u64(needed_chars);
                 }
             }
         }
@@ -314,7 +344,38 @@ impl Fe {
 
     #[inline(always)]
     fn sq(&self) -> Self {
-        Self::mul(self, self)
+        let a0 = self.0[0] as u128;
+        let a1 = self.0[1] as u128;
+        let a2 = self.0[2] as u128;
+        let a3 = self.0[3] as u128;
+        let a4 = self.0[4] as u128;
+
+        let a0_2 = a0 * 2;
+        let a1_2 = a1 * 2;
+        let a2_38 = a2 * 38;
+        let a3_19 = a3 * 19;
+        let a4_19 = a4 * 19;
+
+        let mut c0 = a0 * a0 + a1_2 * a4_19 + a2_38 * a3;
+        let mut c1 = a0_2 * a1 + a2_38 * a4 + a3 * a3_19;
+        let mut c2 = a0_2 * a2 + a1 * a1 + (a3_19 * 2) * a4;
+        let mut c3 = a0_2 * a3 + a1_2 * a2 + a4 * a4_19;
+        let mut c4 = a0_2 * a4 + a1_2 * a3 + a2 * a2;
+
+        c1 += c0 >> 51;
+        c0 &= MASK51 as u128;
+        c2 += c1 >> 51;
+        c1 &= MASK51 as u128;
+        c3 += c2 >> 51;
+        c2 &= MASK51 as u128;
+        c4 += c3 >> 51;
+        c3 &= MASK51 as u128;
+        c0 += (c4 >> 51) * 19;
+        c4 &= MASK51 as u128;
+        c1 += c0 >> 51;
+        c0 &= MASK51 as u128;
+
+        Self([c0 as u64, c1 as u64, c2 as u64, c3 as u64, c4 as u64])
     }
 
     fn pow22523(&self) -> Self {
@@ -482,6 +543,40 @@ impl Fe {
         out[24..32].copy_from_slice(&w3.to_le_bytes());
         out
     }
+    /// Returns the first 8 canonical bytes in big-endian bit order for fast prefix masking.
+    #[inline(always)]
+    fn first_u64_be(self) -> u64 {
+        let mut h = self.0;
+        let mut q = (h[0] + (19 * (h[4] >> 51))) >> 51;
+        q = (h[1] + q) >> 51;
+        q = (h[2] + q) >> 51;
+        q = (h[3] + q) >> 51;
+        q = (h[4] + q) >> 51;
+
+        h[0] += 19 * q;
+        h[1] += h[0] >> 51;
+        h[0] &= MASK51;
+        h[2] += h[1] >> 51;
+        h[1] &= MASK51;
+        h[3] += h[2] >> 51;
+        h[2] &= MASK51;
+        h[4] += h[3] >> 51;
+        h[3] &= MASK51;
+
+        let mut t0 = h[0].wrapping_add(19);
+        let mut t1 = h[1] + (t0 >> 51);
+        t0 &= MASK51;
+        let t2 = h[2] + (t1 >> 51);
+        t1 &= MASK51;
+        let t3 = h[3] + (t2 >> 51);
+        let t4 = (h[4] & MASK51) + (t3 >> 51);
+        let overflow = t4 >> 51;
+
+        let mask = 0u64.wrapping_sub(overflow);
+        let r0 = (h[0] & !mask) | (t0 & mask);
+        let r1 = (h[1] & !mask) | (t1 & mask);
+        (r0 | (r1 << 51)).swap_bytes()
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -627,5 +722,48 @@ mod tests {
             .to_bytes();
 
         assert_eq!(got, expected, "7 steps");
+    }
+
+    #[test]
+    fn dedicated_sq_and_first_u64_be_match_reference() {
+        let seed = [42u8; 32];
+        let hash = Sha512::digest(seed);
+        let mut s_bytes = [0u8; 32];
+        s_bytes.copy_from_slice(&hash[..32]);
+        s_bytes[0] &= 248;
+        s_bytes[31] &= 127;
+        s_bytes[31] |= 64;
+        let pt = ED25519_BASEPOINT_POINT * Scalar::from_bytes_mod_order(s_bytes);
+        let ext = ExtPoint::from_dalek(&pt);
+
+        // Verify dedicated sq() matches mul(x, x)
+        assert_eq!(ext.x.sq().to_bytes(), Fe::mul(&ext.x, &ext.x).to_bytes());
+        assert_eq!(ext.y.sq().to_bytes(), Fe::mul(&ext.y, &ext.y).to_bytes());
+
+        // Verify first_u64_be() matches first 8 bytes of to_bytes()
+        let bytes = ext.y.to_bytes();
+        let expected_u64 = u64::from_be_bytes(bytes[0..8].try_into().unwrap_or([0u8; 8]));
+        assert_eq!(ext.y.first_u64_be(), expected_u64);
+    }
+
+    #[test]
+    fn fast_mask_u64_matches_prefix_matcher() {
+        let bytes: [u8; 32] = [
+            0x73, 0x74, 0xd4, 0x11, 0xaa, 0xbb, 0xcc, 0xdd, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        let encoded = crate::core::base32::encode_onion_bytes(&[
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7], 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ]);
+        let target = std::str::from_utf8(&encoded[..12]).unwrap_or("");
+        let matcher = PrefixMatcher::new(target);
+        let w0 = u64::from_be_bytes(bytes[0..8].try_into().unwrap_or([0u8; 8]));
+        for chars in 1..=12 {
+            let (mask, expected) = matcher.fast_mask_u64(chars);
+            assert_eq!(w0 & mask, expected, "chars={chars}");
+            let (mask_bad, expected_bad) = matcher.fast_mask_u64(chars);
+            assert_ne!((w0 ^ (1u64 << (64 - chars * 5))) & mask_bad, expected_bad);
+        }
     }
 }

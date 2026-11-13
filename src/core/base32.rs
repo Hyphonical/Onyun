@@ -84,12 +84,18 @@ pub(crate) fn encode_onion_bytes(bytes: &[u8; 35]) -> [u8; 56] {
 pub(crate) struct PrefixMatcher {
     /// Target 5-bit Base32 values (0..31) for each character.
     nibbles: Vec<u8>,
+    /// First up to 12 target nibbles packed into the top 60 bits (big-endian bit order).
+    target_u64: u64,
 }
 
 impl PrefixMatcher {
     pub(crate) fn new(target: &str) -> Self {
         let nibbles: Vec<u8> = target.bytes().filter_map(decode_char).collect();
-        Self { nibbles }
+        let mut target_u64 = 0u64;
+        for (i, &nibble) in nibbles.iter().take(12).enumerate() {
+            target_u64 |= (nibble as u64) << (59 - i * 5);
+        }
+        Self { nibbles, target_u64 }
     }
 
     #[inline]
@@ -97,6 +103,17 @@ impl PrefixMatcher {
         self.nibbles.len()
     }
 
+    /// Returns `(mask, expected)` to test whether the first `min_chars` (clamped to `1..=min(len, 12)`)
+    /// match `u64::from_be_bytes(pubkey[0..8])`.
+    #[inline(always)]
+    pub(crate) fn fast_mask_u64(&self, min_chars: usize) -> (u64, u64) {
+        let chars = min_chars.min(self.nibbles.len()).min(12);
+        if chars == 0 {
+            return (0, 0);
+        }
+        let mask = (!0u64) << (64 - chars * 5);
+        (mask, self.target_u64 & mask)
+    }
     /// Returns the number of leading target characters matched by `pubkey` (0..=self.len()).
     /// Optimized to fail fast on character 0, then count upward.
     #[inline]
