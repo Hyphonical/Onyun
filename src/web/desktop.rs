@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use std::sync::Arc;
 use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 
-pub(crate) fn launch(port: u16, state: Arc<AppState>) -> Result<()> {
+pub(crate) fn launch(port: u16, state: &Arc<AppState>) -> Result<()> {
     let url = format!("http://127.0.0.1:{port}/")
         .parse::<tauri::Url>()
         .context("invalid local UI URL")?;
@@ -23,7 +23,7 @@ pub(crate) fn launch(port: u16, state: Arc<AppState>) -> Result<()> {
         .build(tauri::generate_context!("web/tauri.conf.json"))
         .context("failed to build Tauri desktop application")?;
 
-    let state_on_exit = Arc::clone(&state);
+    let state_on_exit = Arc::clone(state);
     app.run(move |app_handle, event| {
         if let RunEvent::Exit = event {
             state_on_exit.stop_mint();

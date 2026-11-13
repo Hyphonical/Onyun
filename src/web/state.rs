@@ -135,7 +135,7 @@ pub(crate) struct AppState {
 impl AppState {
     pub(crate) fn new(out_dir: PathBuf) -> Arc<Self> {
         let cpu_threads = std::thread::available_parallelism()
-            .map(|n| n.get())
+            .map(std::num::NonZero::get)
             .unwrap_or(4);
         let (events_tx, _) = broadcast::channel(64);
         Arc::new(Self {
@@ -423,7 +423,7 @@ impl AppState {
             });
         }
 
-        entries.sort_by(|a, b| b.modified_at.cmp(&a.modified_at));
+        entries.sort_by_key(|a| std::cmp::Reverse(a.modified_at));
         entries
     }
 }

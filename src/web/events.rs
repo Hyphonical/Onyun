@@ -17,7 +17,7 @@ pub(crate) async fn sse_events(
     let mut rx = state.events_tx.subscribe();
     let initial = state.current_snapshot();
 
-    let stream = async_stream_channel(initial, move |tx| async move {
+    let stream = async_stream_channel(&initial, move |tx| async move {
         loop {
             match rx.recv().await {
                 Ok(snap) => {
@@ -44,15 +44,15 @@ pub(crate) async fn sse_events(
 }
 
 fn async_stream_channel<F, Fut>(
-    initial: crate::core::engine::MintSnapshot,
+    initial: &crate::core::engine::MintSnapshot,
     spawn_fn: F,
-) -> impl Stream<Item = Result<Event, Infallible>>
+) -> impl Stream<Item = Result<Event, Infallible>> + use<F, Fut>
 where
     F: FnOnce(tokio::sync::mpsc::Sender<Result<Event, Infallible>>) -> Fut + Send + 'static,
     Fut: Future<Output = ()> + Send + 'static,
 {
     let (tx, mut rx) = tokio::sync::mpsc::channel(32);
-    if let Ok(json) = serde_json::to_string(&initial) {
+    if let Ok(json) = serde_json::to_string(initial) {
         let _ = tx.try_send(Ok(Event::default().event("snapshot").data(json)));
     }
     tokio::spawn(spawn_fn(tx));

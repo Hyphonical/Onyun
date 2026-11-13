@@ -99,7 +99,7 @@ pub(crate) fn run_ui(args: &UiArgs) -> Result<()> {
             let _server = rt.spawn(async move {
                 let _ = axum::serve(listener, router).await;
             });
-            let res = desktop::launch(actual_port, server_state);
+            let res = desktop::launch(actual_port, &server_state);
             state.stop_mint();
             return res;
         }

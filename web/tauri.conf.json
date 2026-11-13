@@ -3,7 +3,7 @@
   "productName": "Onyun",
   "identifier": "dev.onyun.app",
   "build": {
-    "frontendDist": "dist"
+    "frontendDist": "public"
   },
   "bundle": {
     "icon": ["public/branding/icon.ico"]

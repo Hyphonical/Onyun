@@ -30,12 +30,12 @@ fn main() -> io::Result<()> {
     }
     writeln!(out, "];")?;
 
-    if env::var_os("CARGO_FEATURE_DESKTOP").is_some() {
-        if let Err(err) = tauri_build::try_build(
+    if env::var_os("CARGO_FEATURE_DESKTOP").is_some()
+        && let Err(err) = tauri_build::try_build(
             tauri_build::Attributes::new().config_path("web/tauri.conf.json"),
-        ) {
-            return Err(io::Error::other(err));
-        }
+        )
+    {
+        return Err(io::Error::other(err));
     }
     Ok(())
 }
