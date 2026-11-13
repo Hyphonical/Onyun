@@ -21,14 +21,14 @@ desktop = ["web", "dep:tauri"]
 anyhow = "1"
 axum = { version = "0.8", optional = true }
 ctrlc = "3"
-curve25519-dalek = "4"
+curve25519-dalek = "5"
 futures-util = { version = "0.3", optional = true }
-hmac = { version = "0.12", optional = true }
+hmac = { version = "0.13", optional = true }
 rand = "0.9"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", optional = true }
-sha2 = "0.10"
-sha3 = "0.10"
+sha2 = "0.11"
+sha3 = "0.12"
 subtle = { version = "2", optional = true }
 tauri = { version = "2", optional = true }
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"], optional = true }
