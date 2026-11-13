@@ -1,0 +1,14 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Onyun",
+  "identifier": "dev.onyun.app",
+  "build": {
+    "frontendDist": "dist"
+  },
+  "bundle": {
+    "icon": ["public/branding/icon.ico"]
+  },
+  "app": {
+    "withGlobalTauri": false
+  }
+}

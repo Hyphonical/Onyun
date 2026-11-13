@@ -1,0 +1,27 @@
+# Rust build output
+/target/
+
+# Web frontend build output and dependencies
+/web/dist/
+/web/node_modules/
+
+# Environment and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+
+# Generated onion service key material (minted vanity keys)
+hs_ed25519_secret_key
+hs_ed25519_public_key
+hostname
+
+# Editors and OS files
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
