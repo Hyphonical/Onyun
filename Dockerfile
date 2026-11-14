@@ -19,7 +19,8 @@ RUN cargo build --locked --release --no-default-features --features web,gpu
 # Stage 3: Minimal runtime image
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates libvulkan1 \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates libvulkan1 libx11-6 libxext6 libglvnd0 \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 10001 onyun \
     && mkdir -p /data/mints \
