@@ -6,7 +6,7 @@
     <a href="https://github.com/Hyphonical/Onyun/actions/workflows/ci-linux.yml"><img src="https://github.com/Hyphonical/Onyun/actions/workflows/ci-linux.yml/badge.svg" alt="Linux Build" /></a>
     <a href="https://github.com/Hyphonical/Onyun/actions/workflows/ci-docker.yml"><img src="https://github.com/Hyphonical/Onyun/actions/workflows/ci-docker.yml/badge.svg" alt="Docker" /></a>
     <a href="https://github.com/Hyphonical/Onyun/releases"><img src="https://img.shields.io/github/v/release/Hyphonical/Onyun?label=release" alt="Release" /></a>
-    <img src="https://img.shields.io/badge/license-MIT-c2a86c" alt="License: MIT" />
+    <img src="https://img.shields.io/badge/license-AGPLv3-blue" alt="License: AGPLv3" />
   </p>
 </div>
 
@@ -123,4 +123,4 @@ To use a minted address with Tor, copy that folder (with `700` permissions on Li
 
 ## License
 
-Released under the MIT License.
+Released under the [AGPLv3 License](LICENSE).
