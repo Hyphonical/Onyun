@@ -1,7 +1,6 @@
 <script lang="ts">
   import { Copy, Play, Trash2, FolderKey, ChevronUp } from '@lucide/svelte';
   import { formatRelativeTime, store } from '../lib/store.svelte';
-
   const C = 2 * Math.PI * 9;
 </script>
 

@@ -36,6 +36,7 @@ pub(crate) struct SavedMintEntry {
 pub(crate) struct StatusPayload {
     pub(crate) version: &'static str,
     pub(crate) engine: &'static str,
+    pub(crate) device_name: String,
     pub(crate) cpu_threads: usize,
     pub(crate) out_dir: String,
     pub(crate) auth_required: bool,

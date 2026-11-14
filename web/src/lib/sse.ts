@@ -10,7 +10,6 @@ export function subscribeEvents(
       const snap = JSON.parse((ev as MessageEvent<string>).data) as MintSnapshot;
       onSnapshot(snap);
     } catch {
-      // Ignore malformed frames
     }
   });
   es.onerror = () => {

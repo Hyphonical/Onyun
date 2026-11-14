@@ -31,6 +31,7 @@ class OnyunStore {
 
   version = $state('0.1.0');
   engine = $state('CPU');
+  deviceName = $state('CPU');
   cpuThreads = $state(4);
   outDir = $state('./mints');
   authRequired = $state(false);
@@ -70,7 +71,6 @@ class OnyunStore {
         this.connectSse();
       }
     } catch {
-      // Ignore transient resume errors
     }
   }
 
@@ -104,6 +104,7 @@ class OnyunStore {
       const status = await api.status();
       this.version = status.version;
       this.engine = status.engine;
+      this.deviceName = status.device_name || status.engine;
       this.cpuThreads = status.cpu_threads;
       this.threadsInput = status.cpu_threads;
       this.outDir = status.out_dir;
@@ -208,7 +209,6 @@ class OnyunStore {
     try {
       this.mints = await api.listMints();
     } catch {
-      // Ignore transient errors
     }
   }
 
@@ -233,7 +233,6 @@ class OnyunStore {
         return;
       }
     } catch {
-      // Fall through to legacy copy
     }
     try {
       const ta = document.createElement('textarea');

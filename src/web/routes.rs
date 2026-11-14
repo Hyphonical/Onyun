@@ -57,11 +57,17 @@ pub(crate) async fn get_status(
             eta_secs: None,
         }
     };
+    let selected_engine = crate::core::engine::select_engine(crate::core::engine::EngineKind::Auto);
     Json(StatusPayload {
         version: env!("CARGO_PKG_VERSION"),
-        engine: crate::core::engine::select_engine(crate::core::engine::EngineKind::Auto)
+        engine: selected_engine
+            .as_ref()
             .map(|e| e.label())
             .unwrap_or(crate::core::engine::cpu::LABEL),
+        device_name: selected_engine
+            .as_ref()
+            .map(|e| e.device_name())
+            .unwrap_or_else(|_| crate::core::engine::cpu::LABEL.to_string()),
         cpu_threads: state.cpu_threads,
         out_dir: state.out_dir.display().to_string(),
         auth_required: state.auth.is_some(),

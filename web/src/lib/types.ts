@@ -17,6 +17,7 @@ export interface MintSnapshot {
 export interface StatusPayload {
   version: string;
   engine: string;
+  device_name: string;
   cpu_threads: number;
   out_dir: string;
   auth_required: boolean;

@@ -54,7 +54,6 @@
 </script>
 
 <div class="field" class:running={snap.active} class:done={snap.completed && !snap.active}>
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
   <div class="inner" role="presentation" onclick={() => input?.focus()}>
     <div class="line mono" style:--n={w}>
       {#if snap.active}
@@ -107,6 +106,7 @@
     border-radius: var(--r-lg);
     background: var(--border);
     transition: background 200ms;
+    box-shadow: var(--shadow-raised);
   }
   .field.running {
     background: conic-gradient(

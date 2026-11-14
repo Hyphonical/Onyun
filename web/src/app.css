@@ -1,15 +1,15 @@
 @font-face {
-  font-family: "Exclusive Editorial";
-  src: url("/fonts/Exclusive%20Editorial.woff2") format("woff2");
-  font-weight: 400;
-  font-style: normal;
-  font-display: block;
-}
-
-@font-face {
   font-family: "JetBrains Mono";
   src: url("/fonts/JetBrainsMono.woff2") format("woff2");
   font-weight: 400 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "SlugBomb";
+  src: url("/fonts/SlugBomb.woff2") format("woff2");
+  font-weight: 400;
   font-style: normal;
   font-display: swap;
 }
@@ -34,9 +34,10 @@
   --locked-soft: rgba(175, 185, 122, 0.14);
   --danger: #c06d44;
   --danger-soft: rgba(192, 109, 68, 0.14);
+  --shadow-raised: 0 1px 2px rgba(0, 0, 0, 0.35), 0 6px 16px -6px rgba(0, 0, 0, 0.6);
 
-  --font-display: "Exclusive Editorial", Georgia, "Times New Roman", serif;
   --font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-wordmark: "SlugBomb", var(--font-sans);
   --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Code", "SFMono-Regular", Consolas, monospace;
 
   --r-sm: 6px;
@@ -112,15 +113,6 @@ button {
   font-variant-ligatures: none;
 }
 
-.editorial-title {
-  font-family: var(--font-display);
-  font-size: clamp(26px, 3vw, 34px);
-  font-weight: 400;
-  line-height: 1.05;
-  color: var(--head);
-  letter-spacing: 0.01em;
-}
-
 .btn {
   display: inline-flex;
   align-items: center;
@@ -129,6 +121,7 @@ button {
   padding: 6.5px 12px;
   border-radius: var(--r-sm);
   border: 1px solid var(--border);
+  box-shadow: var(--shadow-raised);
   background: var(--surface-1);
   color: var(--fg);
   font-size: 12.5px;
@@ -179,6 +172,7 @@ button {
   background: transparent;
   border-color: transparent;
   color: var(--dim);
+  box-shadow: none;
 }
 
 .btn-ghost:hover:not(:disabled) {
@@ -216,6 +210,7 @@ button {
 .select {
   background: #141414;
   border: 1px solid var(--border);
+  box-shadow: var(--shadow-raised);
   border-radius: var(--r-sm);
   padding: 6px 10px;
   color: var(--fg);
@@ -240,6 +235,7 @@ button {
   padding: 1.5px 6.5px;
   border-radius: 999px;
   border: 1px solid var(--border);
+  box-shadow: var(--shadow-raised);
   color: var(--dim);
   background: var(--surface-0);
   flex-shrink: 0;
@@ -269,6 +265,7 @@ button {
   color: var(--dim);
   background: var(--surface-2);
   border: 1px solid var(--border);
+  box-shadow: var(--shadow-raised);
   border-radius: 4px;
   padding: 1px 5px;
   flex-shrink: 0;
@@ -298,6 +295,7 @@ button {
 .ledger {
   width: 100%;
   border: 1px solid var(--border);
+  box-shadow: var(--shadow-raised);
   border-radius: var(--r-md);
   background: var(--surface-1);
   overflow: hidden;
@@ -333,6 +331,24 @@ button {
 .ledger-row.selected {
   background: var(--accent-soft);
   box-shadow: inset 2px 0 0 var(--accent);
+}
+
+:where(.glow) {
+  position: relative;
+}
+.glow::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -1px;
+  height: 1px;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: var(--prox, 0);
+  background: radial-gradient(220px circle at var(--mx, 50%) 50%, rgba(226, 196, 126, 0.9), rgba(194, 168, 108, 0.35) 45%, transparent 75%);
+  box-shadow: 0 0 12px rgba(194, 168, 108, calc(var(--prox, 0) * 0.55));
+  transition: opacity 90ms linear;
 }
 
 @property --orbit {

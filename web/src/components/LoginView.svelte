@@ -25,12 +25,11 @@
 <div class="standalone-stage">
   <form class="auth-card" onsubmit={handleSubmit}>
     <div class="auth-brand">
-      <img src="/branding/icon.svg" alt="Onyun" class="setup-logo" />
       <span class="brand-word">Onyun</span>
     </div>
 
     <div>
-      <h1 class="editorial-title">Sign in</h1>
+      <h1 class="auth-title">Sign in</h1>
       <p class="auth-sub">Enter your Onyun credentials to access the minter.</p>
     </div>
 
@@ -80,6 +79,7 @@
     background: var(--surface-1);
     border: 1px solid var(--border);
     border-radius: var(--r-lg);
+    box-shadow: var(--shadow-raised);
     padding: 28px 26px;
     display: flex;
     flex-direction: column;
@@ -92,15 +92,19 @@
     gap: 10px;
   }
 
-  .setup-logo {
-    width: 30px;
-    height: 30px;
-    border-radius: 8px;
+  .brand-word {
+    font-family: var(--font-wordmark);
+    font-size: 36px;
+    line-height: 1;
+    letter-spacing: -0.01em;
+    color: var(--head);
   }
 
-  .brand-word {
-    font-family: var(--font-display);
-    font-size: 20px;
+  .auth-title {
+    font-size: 26px;
+    font-weight: 500;
+    line-height: 1.1;
+    letter-spacing: -0.01em;
     color: var(--head);
   }
 
@@ -115,6 +119,7 @@
     border: 1px solid rgba(192, 109, 68, 0.45);
     color: #ebb093;
     border-radius: var(--r-sm);
+    box-shadow: var(--shadow-raised);
     padding: 8px 11px;
     font-size: 12px;
   }
