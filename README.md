@@ -1,7 +1,7 @@
 <div align="center">
   <img src="web/public/branding/icon.svg" alt="Onyun" width="112" height="112" />
   <h1>Onyun</h1>
-  <p><strong>A fast, friendly Tor v3 <code>.onion</code> vanity address minter.</strong></p>
+  <p>A little Tor v3 <code>.onion</code> vanity address generator.</p>
   <p>
     <a href="https://github.com/Hyphonical/Onyun/actions/workflows/ci-linux.yml"><img src="https://github.com/Hyphonical/Onyun/actions/workflows/ci-linux.yml/badge.svg" alt="Linux Build" /></a>
     <a href="https://github.com/Hyphonical/Onyun/actions/workflows/ci-docker.yml"><img src="https://github.com/Hyphonical/Onyun/actions/workflows/ci-docker.yml/badge.svg" alt="Docker" /></a>
@@ -12,24 +12,24 @@
 
 ---
 
-Onyun generates custom Tor v3 `.onion` addresses starting with any prefix you choose. You can run it right in your terminal, open it as a desktop app, or host its web dashboard on a server with Docker.
+Onyun searches for custom Tor v3 `.onion` addresses starting with whatever prefix you want. You can run it straight in your terminal, open it as a desktop window, or leave it running on a home server with Docker.
 
-As Onyun searches, it saves every longer match it finds along the way—so if you ask for a long prefix and stop early, you still keep the closest `.onion` address it reached, ready to drop straight into Tor.
+Because hunting for long prefixes takes a while, Onyun saves every longer match it stumbles across along the way. If you aim for a 9-character name and decide to stop early, you still walk away with the closest `.onion` it found, already formatted and permissioned for Tor. If you run the same command later, it checks your existing `hostname` file and picks up right where it left off.
 
-## Highlights
+## How it works
 
-- **Saves as it goes** — Progressively saves your best match left-to-right (`o...` → `on...` → `onyun...`), so nothing is lost if you pause or stop early.
-- **CPU & GPU support** — Uses all available CPU cores out of the box, or accelerates on GPU via WebGPU / Vulkan when available.
-- **Three ways to use it** — Clean CLI for quick runs, a live Web UI for servers, or a native Tauri desktop window.
-- **Ready for Tor** — Writes `hostname`, `hs_ed25519_secret_key`, and `hs_ed25519_public_key` directly in Tor's `HiddenServiceDir` format.
+* **Saves and resumes automatically:** Every time it hits a longer prefix (`o...` → `on...` → `onyun...`), it atomically writes the keys to disk. Stopping halfway through never wastes the run, and restarting automatically resumes from your best match on disk without needing a database.
+* **Uses whatever hardware you have:** Runs across all your CPU cores by default, or offloads the work to your GPU via WebGPU / Vulkan if you have one available.
+* **Three ways to run it:** A simple CLI for quick terminal runs, a live web dashboard if you want to check in on a VPS or home server, or a native Tauri desktop app.
+* **Ready for `torrc`:** Outputs `hostname`, `hs_ed25519_secret_key`, and `hs_ed25519_public_key` directly in Tor's `HiddenServiceDir` layout, setting `0700` directory and `0600` secret key permissions automatically on Unix.
 
 ---
 
-## Quick Start
+## Getting started
 
 ### Docker (Web UI)
 
-The fastest way to run Onyun on a server or VPS:
+If you want to leave it running on a server, you can spin up the container:
 
 ```bash
 docker run -d \
@@ -39,57 +39,52 @@ docker run -d \
   ghcr.io/hyphonical/onyun:latest
 ```
 
-Or with Docker Compose from this repository:
+Or use the included compose file:
 
 ```bash
 docker compose up -d
 ```
 
-Then open **`http://localhost:8080`** in your browser.
+Once it's up, head to `http://localhost:8080`.
 
-> **Password-protecting the Web UI:** Set `ONYUN_USER` and `ONYUN_PASS` environment variables on the container (or in your shell) to require a login before accessing the dashboard.
->
-> **GPU in Docker:** The container includes Vulkan support and falls back to CPU automatically. On a Linux host with a Vulkan-capable GPU, pass `--device /dev/dri:/dev/dri` (or use the NVIDIA Container Toolkit) to enable GPU minting.
+* **Adding a password:** If you're exposing the web UI, set `ONYUN_USER` and `ONYUN_PASS` on the container (or in your shell) to put a login prompt in front of it.
+* **Using a GPU in Docker:** The image ships with Vulkan support and falls back to CPU if it doesn't find a GPU. On Linux, pass `--device /dev/dri:/dev/dri` (or use the NVIDIA Container Toolkit) to let it use your card.
 
----
+### Prebuilt binaries
 
-### Prebuilt Binary / CLI
-
-Grab a binary for Linux, macOS, or Windows from [Releases](https://github.com/Hyphonical/Onyun/releases), then:
+Grab a binary for Linux, macOS, or Windows from [Releases](https://github.com/Hyphonical/Onyun/releases):
 
 ```bash
-# Mint an address starting with "onyun" in the terminal
+# Search for an address starting with "onyun" in the terminal
 onyun mint onyun
 
-# Launch the native desktop app
+# Open the desktop app
 onyun ui
 
-# Serve only the Web UI (no desktop window)
+# Run just the web UI without a desktop window
 onyun ui --web --port 8080
 ```
 
----
+### Building from source
 
-### Build from Source
-
-Requires [Rust](https://rustup.rs/) and [Bun](https://bun.sh/) (for building the frontend assets):
+You'll need [Rust](https://rustup.rs/) and [Bun](https://bun.sh/) (for the web frontend):
 
 ```bash
-# 1. Build the Web UI
+# 1. Build the frontend assets
 bun install --cwd web
 bun run --cwd web build
 
-# 2. Build Onyun (CLI + Web + GPU, without Tauri desktop dependencies)
+# 2. Build Onyun (CLI + Web + GPU, skipping Tauri desktop dependencies)
 cargo build --release --no-default-features --features web,gpu
 ```
 
-*(Omit `--no-default-features` if you also want the native Tauri desktop window.)*
+*(Drop `--no-default-features` if you want the Tauri desktop app compiled in as well.)*
 
 ---
 
-## Where Your Keys Live
+## Where the keys go
 
-Every target gets its own folder inside `./mints/<prefix>/` (or `/data/mints/<prefix>/` in Docker):
+Each prefix gets its own directory inside `./mints/<prefix>/` (or `/data/mints/<prefix>/` in Docker):
 
 ```text
 mints/
@@ -99,28 +94,29 @@ mints/
     └── hs_ed25519_secret_key
 ```
 
-To use a minted address with Tor, copy that folder (with `700` permissions on Linux/macOS) and point your `torrc` `HiddenServiceDir` to it.
+To use one with Tor, copy that folder over and point `HiddenServiceDir` in your `torrc` to it (Onyun already sets `0700` on the folder and `0600` on `hs_ed25519_secret_key` on Linux/macOS, though you should double-check ownership if copying to a `debian-tor` user).
 
-> **Tip:** Tor v3 addresses use Base32 characters (`a–z` and `2–7`). Each extra character makes the search roughly **32×** longer—5 to 7 characters usually finish quickly, while 8+ characters are where GPU acceleration or letting Onyun save its best match overnight really shines.
+A quick heads-up on prefix length: Tor v3 addresses use Base32 (`a-z` and `2-7`, so `0`, `1`, `8`, and `9` aren't valid), and each extra character makes the search roughly **32x** harder. 5 to 7 characters usually pop up pretty fast, while 8+ characters are better suited for a GPU or leaving it running overnight to see how far it gets.
 
 ---
 
-## Common Options
+## CLI options
 
-| Command & Flag | Default | What it does |
+| Flag / Command | Default | What it does |
 | :--- | :--- | :--- |
-| `onyun mint <prefix>` | — | Start minting an address beginning with `<prefix>` |
-| `-t, --threads <n>` | All cores | Number of CPU worker threads to use |
-| `-e, --engine <kind>` | `auto` | Choose `auto`, `cpu`, or `gpu` |
-| `-o, --out <dir>` | `./mints` | Folder where minted keys are saved |
-| `-q, --quiet` | `false` | Print only the final `.onion` address |
-| `onyun ui` | — | Open the desktop window (or Web UI when built headless) |
-| `--web` | `false` | Run as a headless web server without opening a window |
-| `-p, --port <port>` | `8080` | Port for the Web UI (`0` random port in desktop mode) |
-| `-b, --bind <ip>` | `127.0.0.1` | Bind address (use `0.0.0.0` to expose on your network) |
+| `onyun mint <prefix>` | (required) | Search for an address starting with `<prefix>` |
+| `-t, --threads <n>` | All cores | Number of CPU worker threads |
+| `-e, --engine <kind>` | `auto` | Pick `auto`, `cpu`, or `gpu` |
+| `-o, --out <dir>` | `./mints` | Folder where minted keys get saved |
+| `-q, --quiet` | `false` | Only print the final `.onion` address |
+| `onyun ui` | | Launch the desktop window (or Web UI if built headless) |
+| `--web` | `false` | Serve the web UI without opening a desktop window |
+| `-p, --port <port>` | `0` / `8080` | Port for the UI (`0` random in desktop mode, `8080` with `--web` or non-local `--bind`) |
+| `-b, --bind <ip>` | `127.0.0.1` | Bind address (`0.0.0.0` to expose it on your network) |
+| `--no-color` | `false` | Disable ANSI terminal colors |
 
 ---
 
 ## License
 
-Released under the [AGPLv3 License](LICENSE).
+[AGPLv3](LICENSE)
