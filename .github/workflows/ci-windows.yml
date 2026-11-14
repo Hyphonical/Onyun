@@ -16,9 +16,36 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-
 jobs:
+
+  web:
+    name: Build Web UI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1'
+
+      - name: Install dependencies
+        run: bun install --cwd web --frozen-lockfile
+
+      - name: Build Web UI
+        run: bun run --cwd web build
+
+      - name: Upload Web Assets
+        uses: actions/upload-artifact@v7
+        with:
+          name: web-dist
+          path: web/dist
+          if-no-files-found: error
+          retention-days: 1
+
   build:
+    needs: web
     name: Windows (${{ matrix.arch }})
     runs-on: windows-latest
     strategy:
@@ -45,6 +72,12 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: windows-${{ matrix.arch }}
+
+      - name: Download Web Assets
+        uses: actions/download-artifact@v8
+        with:
+          name: web-dist
+          path: web/dist
 
       - name: Test
         if: matrix.test
