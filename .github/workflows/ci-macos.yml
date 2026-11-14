@@ -48,10 +48,10 @@ jobs:
 
       - name: Test
         if: matrix.test
-        run: cargo test --target ${{ matrix.target }}
+        run: cargo test --features gpu --target ${{ matrix.target }}
 
       - name: Build Release
-        run: cargo build --locked --release --target ${{ matrix.target }}
+        run: cargo build --locked --release --features gpu --target ${{ matrix.target }}
 
       - name: Stage Files
         run: |

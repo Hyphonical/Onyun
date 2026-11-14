@@ -59,7 +59,9 @@ pub(crate) async fn get_status(
     };
     Json(StatusPayload {
         version: env!("CARGO_PKG_VERSION"),
-        engine: crate::core::engine::MintEngine::label(&crate::core::engine::cpu::CpuMkEngine),
+        engine: crate::core::engine::select_engine(crate::core::engine::EngineKind::Auto)
+            .map(|e| e.label())
+            .unwrap_or(crate::core::engine::cpu::LABEL),
         cpu_threads: state.cpu_threads,
         out_dir: state.out_dir.display().to_string(),
         auth_required: state.auth.is_some(),

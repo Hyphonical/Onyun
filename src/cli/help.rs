@@ -94,6 +94,7 @@ pub(crate) fn show(flags: OutputFlags, command: Option<&str>) {
         "mint" => {
             help_group(flags, "Options");
             option(flags, "--threads <n>", "-t", "Worker threads (default: CPU cores)");
+            option(flags, "--engine <kind>", "-e", "Minting engine: auto, cpu, or gpu (default: auto)");
             option(flags, "--out <dir>", "-o", "Base output directory (default: ./mints)");
             option(flags, "--quiet", "-q", "Print final .onion address only");
             option(flags, "--no-color", "", "Disable ANSI colors");

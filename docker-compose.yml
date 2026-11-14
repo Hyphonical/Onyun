@@ -1,0 +1,9 @@
+services:
+  onyun:
+    build: .
+    container_name: onyun
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./mints:/data/mints
+    restart: unless-stopped

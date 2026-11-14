@@ -1,0 +1,9 @@
+target/
+mints/
+.git/
+.gitignore
+web/node_modules/
+web/dist/
+*.log
+.DS_Store
+Thumbs.db

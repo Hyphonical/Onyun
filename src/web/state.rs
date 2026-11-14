@@ -1,10 +1,9 @@
 //! Shared state and background mint coordinator for the Axum / Tauri UI.
 
 use crate::core::base32::normalize_target;
-use crate::core::engine::cpu::CpuMkEngine;
 use crate::core::engine::{
-    compute_progress, EngineHandle, MintConfig, MintEngine, MintMilestone, MintSnapshot,
-    SharedTelemetry,
+    compute_progress, select_engine, EngineHandle, EngineKind, MintConfig, MintMilestone,
+    MintSnapshot, SharedTelemetry,
 };
 use crate::core::storage::{load_existing_best, save_keypair_atomic, target_dir};
 use anyhow::{bail, Result};
@@ -235,7 +234,7 @@ impl AppState {
         let telemetry = Arc::new(SharedTelemetry::new(threads, initial_best_len));
         let (tx, rx) = mpsc::channel::<MintMilestone>();
 
-        let engine = CpuMkEngine;
+        let engine = select_engine(EngineKind::Auto)?;
         let handle: EngineHandle = engine.start(
             MintConfig {
                 target: target.clone(),

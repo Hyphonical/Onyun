@@ -58,13 +58,20 @@ pub(crate) fn run_ui(args: &UiArgs) -> Result<()> {
         if use_desktop { "Desktop (Tauri)" } else { "Web (Axum)" },
         Color::Heading,
     );
+    let ui_engine = crate::core::engine::select_engine(crate::core::engine::EngineKind::Auto);
     render::row(
         flags,
         "ui",
         "Engine",
-        crate::core::engine::MintEngine::label(&crate::core::engine::cpu::CpuMkEngine),
+        ui_engine
+            .as_ref()
+            .map(|e| e.label())
+            .unwrap_or(crate::core::engine::cpu::LABEL),
         Color::Text,
     );
+    if let Ok(engine) = &ui_engine {
+        render::row(flags, "ui", "Device", &engine.device_name(), Color::Text);
+    }
     render::row(
         flags,
         "ui",

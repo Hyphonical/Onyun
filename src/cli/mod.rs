@@ -6,8 +6,7 @@ pub(crate) mod style;
 use crate::cli::args::MintArgs;
 use crate::cli::style::Color;
 use crate::core::base32::normalize_target;
-use crate::core::engine::cpu::CpuMkEngine;
-use crate::core::engine::{compute_progress, MintConfig, MintEngine, MintMilestone, SharedTelemetry};
+use crate::core::engine::{compute_progress, select_engine, MintConfig, MintMilestone, SharedTelemetry};
 use crate::core::storage::{load_existing_best, save_keypair_atomic, target_dir};
 use anyhow::Result;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -29,13 +28,16 @@ pub(crate) fn run_mint(args: &MintArgs) -> Result<()> {
         32f64.powi(target.len() as i32)
     );
 
-    let engine = CpuMkEngine;
+    let engine = select_engine(args.engine)?;
     render::blank(flags);
     render::rule(flags, &format!("Onyun {}", env!("CARGO_PKG_VERSION")));
     render::row(flags, "mint", "Target", &target, Color::Heading);
     render::row(flags, "mint", "Engine", engine.label(), Color::Text);
+    render::row(flags, "mint", "Device", &engine.device_name(), Color::Text);
     render::row(flags, "mint", "Odds", &difficulty, Color::Dim);
-    render::row(flags, "mint", "Threads", &args.threads.to_string(), Color::Text);
+    if engine.label() == "CPU" {
+        render::row(flags, "mint", "Threads", &args.threads.to_string(), Color::Text);
+    }
     render::row(flags, "mint", "Output", &out_path.display().to_string(), Color::Dim);
     if let Some(addr) = &best_address {
         render::done(

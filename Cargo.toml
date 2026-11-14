@@ -16,14 +16,18 @@ web = [
     "dep:tokio",
 ]
 desktop = ["web", "dep:tauri"]
+gpu = ["dep:wgpu", "dep:bytemuck", "dep:pollster"]
 
 [dependencies]
 anyhow = "1"
 axum = { version = "0.8", optional = true }
+bytemuck = { version = "1", features = ["derive"], optional = true }
 ctrlc = "3"
 curve25519-dalek = "5"
 futures-util = { version = "0.3", optional = true }
 hmac = { version = "0.13", optional = true }
+
+pollster = { version = "1", optional = true }
 rand = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", optional = true }
@@ -32,8 +36,9 @@ sha3 = "0.12"
 subtle = { version = "2", optional = true }
 tauri = { version = "2", optional = true }
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"], optional = true }
-
+wgpu = { version = "30", optional = true }
 [build-dependencies]
+
 tauri-build = "2"
 [lints.clippy]
 all = { level = "warn", priority = -1 }

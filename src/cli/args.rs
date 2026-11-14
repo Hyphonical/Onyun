@@ -1,6 +1,7 @@
 //! Handwritten zero-dependency CLI argument parser for `onyun`.
 
 use crate::cli::render::OutputFlags;
+use crate::core::engine::EngineKind;
 use anyhow::{bail, Context, Result};
 use std::path::PathBuf;
 
@@ -17,6 +18,7 @@ pub(crate) struct MintArgs {
     pub(crate) target: String,
     pub(crate) threads: usize,
     pub(crate) out_dir: PathBuf,
+    pub(crate) engine: EngineKind,
     pub(crate) flags: OutputFlags,
 }
 
@@ -69,6 +71,7 @@ where
 {
     let mut target: Option<String> = None;
     let mut threads = default_threads();
+    let mut engine = EngineKind::Auto;
     let mut out_dir = PathBuf::from("./mints");
 
     while let Some(arg) = args.next() {
@@ -89,6 +92,10 @@ where
                 let val = args.next().context("missing value for --out")?;
                 out_dir = PathBuf::from(val);
             }
+            "-e" | "--engine" => {
+                let val = args.next().context("missing value for --engine")?;
+                engine = EngineKind::parse(&val)?;
+            }
             a if a.starts_with('-') => bail!("unknown flag '{a}' for `onyun mint`"),
             pos => {
                 if target.is_some() {
@@ -103,6 +110,7 @@ where
     Ok(Command::Mint(MintArgs {
         target,
         threads,
+        engine,
         out_dir,
         flags,
     }))

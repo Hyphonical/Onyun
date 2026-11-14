@@ -95,7 +95,7 @@ jobs:
           path: web/dist
 
       - name: Build Release Binary
-        run: cargo build --locked --release --target ${{ matrix.target }}
+        run: cargo build --locked --release --features gpu --target ${{ matrix.target }}
 
       - name: Stage Artifact
         shell: bash

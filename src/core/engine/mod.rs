@@ -2,7 +2,10 @@
 //! milestone/snapshot types.
 
 pub(crate) mod cpu;
-
+#[cfg(feature = "gpu")]
+pub(crate) mod gpu;
+mod helper;
+mod simd;
 use crate::core::onion::OnionKeypair;
 use anyhow::Result;
 use serde::Serialize;
@@ -45,6 +48,7 @@ pub(crate) struct MintSnapshot {
 }
 
 /// Cache-line padded atomic counter to eliminate false sharing across worker threads.
+#[repr(align(64))]
 pub(crate) struct PaddedCounter(pub(crate) AtomicU64);
 
 impl Default for PaddedCounter {
@@ -103,6 +107,7 @@ impl EngineHandle {
 #[cfg_attr(not(feature = "web"), allow(dead_code))]
 pub(crate) trait MintEngine: Send + Sync {
     fn label(&self) -> &'static str;
+    fn device_name(&self) -> String;
     fn start(
         &self,
         config: MintConfig,
@@ -110,6 +115,55 @@ pub(crate) trait MintEngine: Send + Sync {
         on_milestone: Sender<MintMilestone>,
         cancel: Arc<AtomicBool>,
     ) -> Result<EngineHandle>;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[cfg_attr(not(feature = "web"), allow(dead_code))]
+pub(crate) enum EngineKind {
+    #[default]
+    Auto,
+    Cpu,
+    Gpu,
+}
+
+impl EngineKind {
+    pub(crate) fn parse(s: &str) -> anyhow::Result<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "auto" => Ok(Self::Auto),
+            "cpu" => Ok(Self::Cpu),
+            "gpu" => Ok(Self::Gpu),
+            other => anyhow::bail!("invalid engine '{other}' (expected `auto`, `cpu`, or `gpu`)"),
+        }
+    }
+}
+
+pub(crate) fn select_engine(kind: EngineKind) -> anyhow::Result<Box<dyn MintEngine>> {
+    match kind {
+        EngineKind::Cpu => Ok(Box::new(cpu::CpuMkEngine)),
+        EngineKind::Gpu => {
+            #[cfg(feature = "gpu")]
+            {
+                if gpu::is_available() {
+                    Ok(Box::new(gpu::GpuMkEngine))
+                } else {
+                    anyhow::bail!("GPU engine requested, but no compatible GPU adapter was found")
+                }
+            }
+            #[cfg(not(feature = "gpu"))]
+            {
+                anyhow::bail!("GPU engine requested, but this binary was built without `--features gpu`")
+            }
+        }
+        EngineKind::Auto => {
+            #[cfg(feature = "gpu")]
+            {
+                if gpu::is_available() {
+                    return Ok(Box::new(gpu::GpuMkEngine));
+                }
+            }
+            Ok(Box::new(cpu::CpuMkEngine))
+        }
+    }
 }
 
 /// Computes logarithmic milestone + memoryless exponential intra-step progress,
