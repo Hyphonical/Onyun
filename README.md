@@ -2,6 +2,7 @@
   <img src="web/public/branding/icon.svg" alt="Onyun" width="112" height="112" />
   <h1>Onyun</h1>
   <p>A little Tor v3 <code>.onion</code> vanity address generator.</p>
+  <img src="assets\Demo.gif" alt="Demo" width="600"/>
   <p>
     <a href="https://github.com/Hyphonical/Onyun/actions/workflows/ci-linux.yml"><img src="https://github.com/Hyphonical/Onyun/actions/workflows/ci-linux.yml/badge.svg" alt="Linux Build" /></a>
     <a href="https://github.com/Hyphonical/Onyun/actions/workflows/ci-docker.yml"><img src="https://github.com/Hyphonical/Onyun/actions/workflows/ci-docker.yml/badge.svg" alt="Docker" /></a>
@@ -22,6 +23,30 @@ Because hunting for long prefixes takes a while, Onyun saves every longer match 
 * **Uses whatever hardware you have:** Runs across all your CPU cores by default, or offloads the work to your GPU via WebGPU / Vulkan if you have one available.
 * **Three ways to run it:** A simple CLI for quick terminal runs, a live web dashboard if you want to check in on a VPS or home server, or a native Tauri desktop app.
 * **Ready for `torrc`:** Outputs `hostname`, `hs_ed25519_secret_key`, and `hs_ed25519_public_key` directly in Tor's `HiddenServiceDir` layout, setting `0700` directory and `0600` secret key permissions automatically on Unix.
+
+### Estimated search time
+
+Average time to find a prefix of a given length at a given hashrate.
+
+| Prefix length | 0.5 MH/s | 1 MH/s | 4 MH/s | 10 MH/s | 50 MH/s | 100 MH/s | 500 MH/s | 1000 MH/s |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 5 | 67 s | 34 s | 8 s | 3 s | <1 s | <1 s | <1 s | <1 s |
+| 6 | 36 min | 18 min | 4.5 min | 1.8 min | 21 s | 11 s | 2 s | 1 s |
+| 7 | 19 h | 9.5 h | 2.4 h | 57 min | 11.5 min | 5.7 min | 69 s | 34 s |
+| 8 | 25 days | 13 days | 3.2 days | 30 h | 6.1 h | 3 h | 37 min | 18 min |
+| 9 | 2.2 years | 1.1 years | 102 days | 41 days | 8 days | 4 days | 19.5 h | 9.8 h |
+| 10 | 71 years | 36 years | 8.9 years | 3.6 years | 260 days | 130 days | 26 days | 13 days |
+
+### Measured hashrates
+
+| Hardware | Engine | Hashrate |
+| :--- | :--- | ---: |
+| AMD Ryzen 7 7700 (13 threads) | CPU | ~96 MH/s |
+| AMD Ryzen 5 5600G (11 threads) | CPU | ~65 MH/s |
+| NVIDIA GeForce RTX 4070 | GPU (WGPU/Vulkan) | ~181 MH/s |
+| NVIDIA GeForce RTX 4060 Laptop | GPU (WGPU/Vulkan) | ~90 MH/s |
+
+*Averages only: the search is random, so you can get lucky or unlucky. Roughly half of runs finish within 0.7× the listed time, and about 95% within 3×. Each extra character multiplies the time by 32.*
 
 ---
 
