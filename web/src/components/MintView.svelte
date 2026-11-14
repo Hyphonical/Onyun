@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Tween } from 'svelte/motion';
-  import { Play, Square, AlertCircle, Download } from '@lucide/svelte';
+  import { Play, Square, AlertCircle } from '@lucide/svelte';
   import { formatCount, formatDuration, formatHashrate, store } from '../lib/store.svelte';
   import OnionDisplay from './OnionDisplay.svelte';
 
@@ -77,16 +77,6 @@
       </div>
 
       <div class="controls-right">
-        {#if snap.best_address || store.mints.length > 0}
-          <button
-            type="button"
-            class="go go-export"
-            title="Export latest mint as .tar"
-            onclick={() => store.exportMint()}
-          >
-            <Download size={14} /><span>Export</span>
-          </button>
-        {/if}
         {#if snap.active}
           <button type="submit" class="go go-stop" disabled={store.busy}>
             <Square size={14} /><span>Stop</span>
@@ -173,17 +163,6 @@
     font-weight: 500;
   }
   .seg-btn:disabled { opacity: 0.55; cursor: not-allowed; }
-  .go-export {
-    min-width: auto;
-    padding: 0 14px;
-    background: var(--surface-1);
-    border-color: var(--border);
-    color: var(--fg);
-  }
-  .go-export:hover:not(:disabled) {
-    border-color: rgba(194, 168, 108, 0.45);
-    color: var(--head);
-  }
   .go {
     height: 36px;
     min-width: 108px;

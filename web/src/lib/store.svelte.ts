@@ -5,6 +5,22 @@ import type { ComputeDevice, EngineMode, MintSnapshot, SavedMintEntry, Scene, Ta
 const BASE32_RE = /^[a-z2-7]+$/;
 const SPARKLINE_POINTS = 60;
 
+interface SaveHandle {
+  readonly name: string;
+  createWritable(): Promise<{
+    write(data: Blob): Promise<void>;
+    close(): Promise<void>;
+    abort(): Promise<void>;
+  }>;
+}
+
+type SaveWindow = Window & {
+  showSaveFilePicker?: (options: {
+    suggestedName: string;
+    types: { description: string; accept: Record<string, string[]> }[];
+  }) => Promise<SaveHandle>;
+};
+
 const emptySnapshot: MintSnapshot = {
   active: false,
   completed: false,
@@ -289,18 +305,49 @@ class OnyunStore {
     }
   }
 
-  exportMint(target?: string) {
-    const t = target ?? (this.snapshot.target || this.mints[0]?.target);
-    if (!t) {
-      this.toast('No saved mint available to export');
+  async exportMint(target: string) {
+    const name = `${target}.tar`;
+    const w = window as SaveWindow;
+    if (!w.showSaveFilePicker) {
+      const a = document.createElement('a');
+      a.href = api.exportMintUrl(target);
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
       return;
     }
-    const a = document.createElement('a');
-    a.href = api.exportMintUrl(t);
-    a.download = `${t}.tar`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    let handle: SaveHandle;
+    try {
+      handle = await w.showSaveFilePicker({
+        suggestedName: name,
+        types: [{ description: 'Tar archive', accept: { 'application/x-tar': ['.tar'] } }]
+      });
+    } catch (err) {
+      if (!(err instanceof DOMException && err.name === 'AbortError')) {
+        this.toast(err instanceof Error ? err.message : 'Could not open save dialog');
+      }
+      return;
+    }
+    try {
+      const res = await fetch(api.exportMintUrl(target), { credentials: 'same-origin' });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(body?.error ?? `Export failed (${res.status})`);
+      }
+      const blob = await res.blob();
+      const writable = await handle.createWritable();
+      try {
+        await writable.write(blob);
+        await writable.close();
+      } catch (err) {
+        await writable.abort();
+        throw err;
+      }
+      this.toast(`Saved ${handle.name}`);
+    } catch (err) {
+      this.toast(err instanceof Error ? err.message : 'Export failed');
+    }
   }
 
   async copyText(value: string, label = 'Copied to clipboard') {
