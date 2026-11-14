@@ -6,11 +6,13 @@ pub(crate) mod style;
 use crate::cli::args::MintArgs;
 use crate::cli::style::Color;
 use crate::core::base32::normalize_target;
-use crate::core::engine::{compute_progress, select_engine, MintConfig, MintMilestone, SharedTelemetry};
+use crate::core::engine::{
+    MintConfig, MintMilestone, SharedTelemetry, compute_progress, select_engine,
+};
 use crate::core::storage::{load_existing_best, save_keypair_atomic, target_dir};
 use anyhow::Result;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 pub(crate) fn run_mint(args: &MintArgs) -> Result<()> {
@@ -30,15 +32,30 @@ pub(crate) fn run_mint(args: &MintArgs) -> Result<()> {
 
     let engine = select_engine(args.engine)?;
     render::blank(flags);
-    render::rule(flags, &format!("Onyun {}", env!("CARGO_PKG_VERSION")));
+    render::rule(
+        flags,
+        &format!("Onyun Mint (v{})", env!("CARGO_PKG_VERSION")),
+    );
     render::row(flags, "mint", "Target", &target, Color::Heading);
     render::row(flags, "mint", "Engine", engine.label(), Color::Text);
     render::row(flags, "mint", "Device", &engine.device_name(), Color::Text);
     render::row(flags, "mint", "Odds", &difficulty, Color::Dim);
     if engine.label() == "CPU" {
-        render::row(flags, "mint", "Threads", &args.threads.to_string(), Color::Text);
+        render::row(
+            flags,
+            "mint",
+            "Threads",
+            &args.threads.to_string(),
+            Color::Text,
+        );
     }
-    render::row(flags, "mint", "Output", &out_path.display().to_string(), Color::Dim);
+    render::row(
+        flags,
+        "mint",
+        "Output",
+        &out_path.display().to_string(),
+        Color::Dim,
+    );
     if let Some(addr) = &best_address {
         render::done(
             flags,
@@ -70,13 +87,15 @@ pub(crate) fn run_mint(args: &MintArgs) -> Result<()> {
         cancel_signal.store(true, Ordering::SeqCst);
     });
 
-    let telemetry = Arc::new(SharedTelemetry::new(args.threads, initial_best_len));
+    let slots = engine.slot_count(args.threads);
+    let telemetry = Arc::new(SharedTelemetry::new(slots, initial_best_len));
     let (tx, rx) = mpsc::channel::<MintMilestone>();
 
     let handle = engine.start(
         MintConfig {
             target: target.clone(),
             threads: args.threads,
+            telemetry_offset: 0,
         },
         Arc::clone(&telemetry),
         tx,
@@ -158,8 +177,20 @@ pub(crate) fn run_mint(args: &MintArgs) -> Result<()> {
         if flags.quiet {
             println!("{addr}");
         } else {
-            render::row(flags, "mint", "Elapsed", &render::format_duration(elapsed), Color::Dim);
-            render::row(flags, "mint", "Speed", &render::format_rate(avg_rate), Color::Dim);
+            render::row(
+                flags,
+                "mint",
+                "Elapsed",
+                &render::format_duration(elapsed),
+                Color::Dim,
+            );
+            render::row(
+                flags,
+                "mint",
+                "Speed",
+                &render::format_rate(avg_rate),
+                Color::Dim,
+            );
             render::row(
                 flags,
                 "mint",

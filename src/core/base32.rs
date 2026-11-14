@@ -1,7 +1,7 @@
 //! Tor v3 RFC 4648 lowercase Base32 (`a-z`, `2-7`) validation, encoding, and
 //! zero-allocation bit-level prefix matching.
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 const ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
 
@@ -95,7 +95,10 @@ impl PrefixMatcher {
         for (i, &nibble) in nibbles.iter().take(12).enumerate() {
             target_u64 |= (nibble as u64) << (59 - i * 5);
         }
-        Self { nibbles, target_u64 }
+        Self {
+            nibbles,
+            target_u64,
+        }
     }
 
     #[inline]
@@ -145,7 +148,10 @@ impl PrefixMatcher {
 
     /// Counts how many leading characters of an existing `.onion` hostname match this target.
     pub(crate) fn matched_len_hostname(&self, hostname: &str) -> usize {
-        let stem = hostname.trim().strip_suffix(".onion").unwrap_or(hostname.trim());
+        let stem = hostname
+            .trim()
+            .strip_suffix(".onion")
+            .unwrap_or(hostname.trim());
         let mut matched = 0;
         for (a, &expected) in stem.bytes().zip(self.nibbles.iter()) {
             if decode_char(a) == Some(expected) {
@@ -164,8 +170,14 @@ mod tests {
 
     #[test]
     fn validates_base32_targets() {
-        assert_eq!(normalize_target("OnyunShop").ok().as_deref(), Some("onyunshop"));
-        assert_eq!(normalize_target("a234567z").ok().as_deref(), Some("a234567z"));
+        assert_eq!(
+            normalize_target("OnyunShop").ok().as_deref(),
+            Some("onyunshop")
+        );
+        assert_eq!(
+            normalize_target("a234567z").ok().as_deref(),
+            Some("a234567z")
+        );
         assert!(normalize_target("").is_err());
         assert!(normalize_target("onyun0189").is_err());
         assert!(normalize_target("onyun!").is_err());

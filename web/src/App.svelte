@@ -1,12 +1,23 @@
 <script lang="ts">
-  import { Cpu, Github, LogOut } from '@lucide/svelte';
+  import { Check, ChevronDown, Cpu, Github, LogOut } from '@lucide/svelte';
   import { store } from './lib/store.svelte';
   import MintView from './components/MintView.svelte';
   import MintsView from './components/MintsView.svelte';
   import LoginView from './components/LoginView.svelte';
 
   const snap = $derived(store.snapshot);
+  let devicesOpen = $state(false);
+
+  function handleWindowClick(e: MouseEvent) {
+    if (!devicesOpen) return;
+    const target = e.target as HTMLElement | null;
+    if (!target?.closest('.device-picker')) {
+      devicesOpen = false;
+    }
+  }
 </script>
+
+<svelte:window onclick={handleWindowClick} />
 
 <div class="root-frame">
   {#if store.scene === 'loading'}
@@ -27,13 +38,50 @@
       </span>
     </div>
     <div class="top-cluster">
-      <span class="engine mono" class:live={snap.active} title={store.deviceName}>
-        <span class="dot"></span>
-        <Cpu size={13} />
-        <span class="device-name">{store.deviceName}</span>
-        <span class="sep">·</span>
-        <span>{store.threadsInput}/{store.cpuThreads}</span>
-      </span>
+      <div class="device-picker">
+        <button
+          type="button"
+          class="engine mono"
+          class:live={snap.active}
+          class:open={devicesOpen}
+          title={store.activeDeviceSummary}
+          aria-expanded={devicesOpen}
+          onclick={() => (devicesOpen = !devicesOpen)}
+        >
+          <span class="dot"></span>
+          <Cpu size={13} />
+          <span class="device-name">{store.activeDeviceSummary}</span>
+          {#if store.usesCpu}
+            <span class="sep">·</span>
+            <span>{store.threadsInput}/{store.cpuThreads}</span>
+          {/if}
+          <ChevronDown size={13} class="caret" />
+        </button>
+        {#if devicesOpen}
+          <div class="device-menu" role="dialog" aria-label="Compute devices">
+            <div class="device-menu-head">
+              <span>Compute devices</span>
+              <span class="mono hint">{store.engineMode}</span>
+            </div>
+            {#each store.devices as dev (dev.id)}
+              {@const checked = store.enabledDevices.includes(dev.id)}
+              <button
+                type="button"
+                class="device-item"
+                class:checked
+                disabled={snap.active}
+                onclick={() => store.toggleDevice(dev.id)}
+              >
+                <span class="chk" class:on={checked} aria-hidden="true">
+                  {#if checked}<Check size={11} strokeWidth={3} />{/if}
+                </span>
+                <span class="dev-kind mono">{dev.kind.toUpperCase()}</span>
+                <span class="dev-label">{dev.name}</span>
+              </button>
+            {/each}
+          </div>
+        {/if}
+      </div>
       <a
         class="gh-link"
         href="https://github.com/Hyphonical/Onyun"
@@ -140,6 +188,85 @@
     animation: pulse 1.8s ease-in-out infinite;
   }
   @keyframes pulse { 50% { opacity: 0.35; } }
+  .device-picker { position: relative; }
+  .engine { cursor: pointer; transition: border-color 140ms, color 140ms; }
+  .engine:hover, .engine.open { border-color: rgba(194, 168, 108, 0.45); color: var(--fg); }
+  .engine :global(.caret) { color: var(--muted); transition: transform 160ms; }
+  .engine.open :global(.caret) { transform: rotate(180deg); }
+  .device-menu {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    min-width: 280px;
+    max-width: 340px;
+    padding: 8px;
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    box-shadow: 0 14px 36px rgba(0, 0, 0, 0.52);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    z-index: 40;
+  }
+  .device-menu-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 8px 6px;
+    font-size: 11px;
+    color: var(--dim);
+    border-bottom: 1px solid var(--border-subtle);
+    margin-bottom: 2px;
+  }
+  .device-menu-head .hint { color: var(--accent); text-transform: uppercase; }
+  .device-item {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    padding: 7px 8px;
+    border-radius: var(--r-sm);
+    color: var(--dim);
+    text-align: left;
+    font-size: 12.5px;
+    transition: background 110ms, color 110ms;
+  }
+  .device-item:hover:not(:disabled) { background: var(--surface-2); color: var(--fg); }
+  .device-item.checked { color: var(--head); }
+  .device-item:disabled { opacity: 0.55; cursor: not-allowed; }
+  .chk {
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    display: grid;
+    place-items: center;
+    color: var(--bg);
+    transition: background 120ms, border-color 120ms, box-shadow 120ms;
+  }
+  .chk.on {
+    background: var(--accent);
+    border-color: var(--accent);
+    box-shadow: 0 0 10px rgba(194, 168, 108, 0.35);
+  }
+  .dev-kind {
+    font-size: 10px;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: var(--surface-2);
+    color: var(--accent);
+    border: 1px solid var(--border-subtle);
+    flex-shrink: 0;
+  }
+  .dev-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
   .stage {
     position: relative;
     z-index: 1;

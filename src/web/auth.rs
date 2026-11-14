@@ -2,11 +2,11 @@
 
 use crate::web::state::AppState;
 use axum::{
+    Json,
     extract::{Request, State},
-    http::{header, HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
     middleware::Next,
     response::{IntoResponse, Response},
-    Json,
 };
 use serde::Serialize;
 use std::sync::Arc;
@@ -35,8 +35,7 @@ pub(crate) fn is_authenticated(state: &AppState, headers: &HeaderMap) -> bool {
     let Some(auth) = &state.auth else {
         return true;
     };
-    extract_cookie(headers, COOKIE_NAME)
-        .is_some_and(|token| auth.verify_token(&token))
+    extract_cookie(headers, COOKIE_NAME).is_some_and(|token| auth.verify_token(&token))
 }
 
 pub(crate) async fn require_auth(

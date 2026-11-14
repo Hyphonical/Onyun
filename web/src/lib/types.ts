@@ -1,3 +1,11 @@
+export type EngineMode = 'auto' | 'gpu' | 'cpu' | 'hybrid';
+
+export interface ComputeDevice {
+  id: string;
+  kind: 'gpu' | 'cpu';
+  name: string;
+}
+
 export interface MintSnapshot {
   active: boolean;
   completed: boolean;
@@ -17,7 +25,9 @@ export interface MintSnapshot {
 export interface StatusPayload {
   version: string;
   engine: string;
+  engine_kind: EngineMode;
   device_name: string;
+  devices: ComputeDevice[];
   cpu_threads: number;
   out_dir: string;
   auth_required: boolean;

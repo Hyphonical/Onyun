@@ -1,4 +1,4 @@
-import type { MintSnapshot, SavedMintEntry, StatusPayload } from './types';
+import type { EngineMode, MintSnapshot, SavedMintEntry, StatusPayload } from './types';
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
@@ -39,16 +39,17 @@ export const api = {
     request<{ ok: boolean }>('/api/auth/logout', {
       method: 'POST'
     }),
-  startMint: (target: string, threads?: number) =>
+  startMint: (target: string, threads?: number, engine?: EngineMode, devices?: string[]) =>
     request<MintSnapshot>('/api/mint/start', {
       method: 'POST',
-      body: JSON.stringify({ target, threads })
+      body: JSON.stringify({ target, threads, engine, devices })
     }),
   stopMint: () =>
     request<{ ok: boolean }>('/api/mint/stop', {
       method: 'POST'
     }),
   listMints: () => request<SavedMintEntry[]>('/api/mints'),
+  exportMintUrl: (target: string) => `/api/mints/${encodeURIComponent(target)}/export`,
   deleteMint: (target: string) =>
     request<{ ok: boolean }>(`/api/mints/${encodeURIComponent(target)}`, {
       method: 'DELETE'

@@ -10,7 +10,10 @@ use std::{
 fn main() -> io::Result<()> {
     println!("cargo:rerun-if-changed=web/dist");
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").ok_or_else(|| {
-        io::Error::new(io::ErrorKind::NotFound, "missing OUT_DIR environment variable")
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "missing OUT_DIR environment variable",
+        )
     })?);
     let dest = out_dir.join("web_assets.rs");
     let mut out = File::create(dest)?;
@@ -22,11 +25,17 @@ fn main() -> io::Result<()> {
         entries.sort_by(|a, b| a.0.cmp(&b.0));
     }
 
-    writeln!(out, "pub(super) static WEB_ASSETS: &[(&str, &str, &[u8])] = &[")?;
+    writeln!(
+        out,
+        "pub(super) static WEB_ASSETS: &[(&str, &str, &[u8])] = &["
+    )?;
     for (route, abs_path) in entries {
         let mime = mime_for(&route);
         let escaped_path = abs_path.to_string_lossy().replace('\\', "/");
-        writeln!(out, "\t({route:?}, {mime:?}, include_bytes!({escaped_path:?})),")?;
+        writeln!(
+            out,
+            "\t({route:?}, {mime:?}, include_bytes!({escaped_path:?})),"
+        )?;
     }
     writeln!(out, "];")?;
 
@@ -66,7 +75,13 @@ fn collect_files(root: &Path, dir: &Path, out: &mut Vec<(String, PathBuf)>) {
 }
 
 fn mime_for(route: &str) -> &'static str {
-    match route.rsplit('.').next().unwrap_or("").to_ascii_lowercase().as_str() {
+    match route
+        .rsplit('.')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
         "html" => "text/html; charset=utf-8",
         "js" | "mjs" => "text/javascript; charset=utf-8",
         "css" => "text/css; charset=utf-8",

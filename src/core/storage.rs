@@ -29,7 +29,11 @@ pub(crate) fn load_existing_best(base_dir: &Path, target: &str) -> Option<(Strin
 
 /// Atomically writes `hs_ed25519_secret_key`, `hs_ed25519_public_key`, and
 /// `hostname` into `<base_dir>/<target>/`.
-pub(crate) fn save_keypair_atomic(base_dir: &Path, target: &str, kp: &OnionKeypair) -> Result<PathBuf> {
+pub(crate) fn save_keypair_atomic(
+    base_dir: &Path,
+    target: &str,
+    kp: &OnionKeypair,
+) -> Result<PathBuf> {
     let dir = target_dir(base_dir, target);
     fs::create_dir_all(&dir)
         .with_context(|| format!("failed to create output directory {}", dir.display()))?;

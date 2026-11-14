@@ -4,10 +4,10 @@ mod core;
 mod web;
 
 use crate::cli::render::OutputFlags;
+use anyhow::Result;
 #[cfg(not(feature = "web"))]
 use anyhow::bail;
-use anyhow::Result;
-use cli::args::{parse_args, Command};
+use cli::args::{Command, parse_args};
 
 fn main() {
     if let Err(err) = run() {

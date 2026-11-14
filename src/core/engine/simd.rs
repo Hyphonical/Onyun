@@ -4,10 +4,10 @@
 #[cfg(target_arch = "x86_64")]
 pub(super) mod avx2 {
     use crate::core::base32::PrefixMatcher;
-    use crate::core::engine::helper::{derive_expanded_secret, Fe, MontPoint, MontStep};
-    use crate::core::engine::SharedTelemetry;
     use crate::core::engine::MintMilestone;
-    use crate::core::onion::{derive_address, OnionKeypair};
+    use crate::core::engine::SharedTelemetry;
+    use crate::core::engine::helper::{Fe, MontPoint, MontStep, derive_expanded_secret};
+    use crate::core::onion::{OnionKeypair, derive_address};
     use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
     use curve25519_dalek::scalar::Scalar;
     use rand::Rng;
@@ -61,12 +61,7 @@ pub(super) mod avx2 {
             let l3 = fe5_to_10(f[3]);
             let mut out = [_mm256_setzero_si256(); 10];
             for i in 0..10 {
-                out[i] = _mm256_set_epi64x(
-                    l3[i] as i64,
-                    l2[i] as i64,
-                    l1[i] as i64,
-                    l0[i] as i64,
-                );
+                out[i] = _mm256_set_epi64x(l3[i] as i64, l2[i] as i64, l1[i] as i64, l0[i] as i64);
             }
             Self(out)
         }
@@ -91,409 +86,409 @@ pub(super) mod avx2 {
         #[inline]
         #[target_feature(enable = "avx2")]
         unsafe fn sub(a: &Self, b: &Self) -> Self {
-                let m26 = _mm256_set1_epi64x(MASK26 as i64);
-                let m25 = _mm256_set1_epi64x(MASK25 as i64);
-                let k19 = _mm256_set1_epi64x(19);
+            let m26 = _mm256_set1_epi64x(MASK26 as i64);
+            let m25 = _mm256_set1_epi64x(MASK25 as i64);
+            let k19 = _mm256_set1_epi64x(19);
 
-                let mut c0 = _mm256_sub_epi64(
-                    _mm256_add_epi64(a.0[0], _mm256_set1_epi64x(0x0fff_ffb4)),
-                    b.0[0],
-                );
-                let mut c1 = _mm256_sub_epi64(
-                    _mm256_add_epi64(a.0[1], _mm256_set1_epi64x(0x07ff_fffc)),
-                    b.0[1],
-                );
-                let mut c2 = _mm256_sub_epi64(
-                    _mm256_add_epi64(a.0[2], _mm256_set1_epi64x(0x0fff_fffc)),
-                    b.0[2],
-                );
-                let mut c3 = _mm256_sub_epi64(
-                    _mm256_add_epi64(a.0[3], _mm256_set1_epi64x(0x07ff_fffc)),
-                    b.0[3],
-                );
-                let mut c4 = _mm256_sub_epi64(
-                    _mm256_add_epi64(a.0[4], _mm256_set1_epi64x(0x0fff_fffc)),
-                    b.0[4],
-                );
-                let mut c5 = _mm256_sub_epi64(
-                    _mm256_add_epi64(a.0[5], _mm256_set1_epi64x(0x07ff_fffc)),
-                    b.0[5],
-                );
-                let mut c6 = _mm256_sub_epi64(
-                    _mm256_add_epi64(a.0[6], _mm256_set1_epi64x(0x0fff_fffc)),
-                    b.0[6],
-                );
-                let mut c7 = _mm256_sub_epi64(
-                    _mm256_add_epi64(a.0[7], _mm256_set1_epi64x(0x07ff_fffc)),
-                    b.0[7],
-                );
-                let mut c8 = _mm256_sub_epi64(
-                    _mm256_add_epi64(a.0[8], _mm256_set1_epi64x(0x0fff_fffc)),
-                    b.0[8],
-                );
-                let mut c9 = _mm256_sub_epi64(
-                    _mm256_add_epi64(a.0[9], _mm256_set1_epi64x(0x07ff_fffc)),
-                    b.0[9],
-                );
+            let mut c0 = _mm256_sub_epi64(
+                _mm256_add_epi64(a.0[0], _mm256_set1_epi64x(0x0fff_ffb4)),
+                b.0[0],
+            );
+            let mut c1 = _mm256_sub_epi64(
+                _mm256_add_epi64(a.0[1], _mm256_set1_epi64x(0x07ff_fffc)),
+                b.0[1],
+            );
+            let mut c2 = _mm256_sub_epi64(
+                _mm256_add_epi64(a.0[2], _mm256_set1_epi64x(0x0fff_fffc)),
+                b.0[2],
+            );
+            let mut c3 = _mm256_sub_epi64(
+                _mm256_add_epi64(a.0[3], _mm256_set1_epi64x(0x07ff_fffc)),
+                b.0[3],
+            );
+            let mut c4 = _mm256_sub_epi64(
+                _mm256_add_epi64(a.0[4], _mm256_set1_epi64x(0x0fff_fffc)),
+                b.0[4],
+            );
+            let mut c5 = _mm256_sub_epi64(
+                _mm256_add_epi64(a.0[5], _mm256_set1_epi64x(0x07ff_fffc)),
+                b.0[5],
+            );
+            let mut c6 = _mm256_sub_epi64(
+                _mm256_add_epi64(a.0[6], _mm256_set1_epi64x(0x0fff_fffc)),
+                b.0[6],
+            );
+            let mut c7 = _mm256_sub_epi64(
+                _mm256_add_epi64(a.0[7], _mm256_set1_epi64x(0x07ff_fffc)),
+                b.0[7],
+            );
+            let mut c8 = _mm256_sub_epi64(
+                _mm256_add_epi64(a.0[8], _mm256_set1_epi64x(0x0fff_fffc)),
+                b.0[8],
+            );
+            let mut c9 = _mm256_sub_epi64(
+                _mm256_add_epi64(a.0[9], _mm256_set1_epi64x(0x07ff_fffc)),
+                b.0[9],
+            );
 
-                c1 = _mm256_add_epi64(c1, _mm256_srli_epi64::<26>(c0));
-                c0 = _mm256_and_si256(c0, m26);
-                c2 = _mm256_add_epi64(c2, _mm256_srli_epi64::<25>(c1));
-                c1 = _mm256_and_si256(c1, m25);
-                c3 = _mm256_add_epi64(c3, _mm256_srli_epi64::<26>(c2));
-                c2 = _mm256_and_si256(c2, m26);
-                c4 = _mm256_add_epi64(c4, _mm256_srli_epi64::<25>(c3));
-                c3 = _mm256_and_si256(c3, m25);
-                c5 = _mm256_add_epi64(c5, _mm256_srli_epi64::<26>(c4));
-                c4 = _mm256_and_si256(c4, m26);
-                c6 = _mm256_add_epi64(c6, _mm256_srli_epi64::<25>(c5));
-                c5 = _mm256_and_si256(c5, m25);
-                c7 = _mm256_add_epi64(c7, _mm256_srli_epi64::<26>(c6));
-                c6 = _mm256_and_si256(c6, m26);
-                c8 = _mm256_add_epi64(c8, _mm256_srli_epi64::<25>(c7));
-                c7 = _mm256_and_si256(c7, m25);
-                c9 = _mm256_add_epi64(c9, _mm256_srli_epi64::<26>(c8));
-                c8 = _mm256_and_si256(c8, m26);
-                c0 = _mm256_add_epi64(c0, _mm256_mul_epu32(_mm256_srli_epi64::<25>(c9), k19));
-                c9 = _mm256_and_si256(c9, m25);
-                c1 = _mm256_add_epi64(c1, _mm256_srli_epi64::<26>(c0));
-                c0 = _mm256_and_si256(c0, m26);
+            c1 = _mm256_add_epi64(c1, _mm256_srli_epi64::<26>(c0));
+            c0 = _mm256_and_si256(c0, m26);
+            c2 = _mm256_add_epi64(c2, _mm256_srli_epi64::<25>(c1));
+            c1 = _mm256_and_si256(c1, m25);
+            c3 = _mm256_add_epi64(c3, _mm256_srli_epi64::<26>(c2));
+            c2 = _mm256_and_si256(c2, m26);
+            c4 = _mm256_add_epi64(c4, _mm256_srli_epi64::<25>(c3));
+            c3 = _mm256_and_si256(c3, m25);
+            c5 = _mm256_add_epi64(c5, _mm256_srli_epi64::<26>(c4));
+            c4 = _mm256_and_si256(c4, m26);
+            c6 = _mm256_add_epi64(c6, _mm256_srli_epi64::<25>(c5));
+            c5 = _mm256_and_si256(c5, m25);
+            c7 = _mm256_add_epi64(c7, _mm256_srli_epi64::<26>(c6));
+            c6 = _mm256_and_si256(c6, m26);
+            c8 = _mm256_add_epi64(c8, _mm256_srli_epi64::<25>(c7));
+            c7 = _mm256_and_si256(c7, m25);
+            c9 = _mm256_add_epi64(c9, _mm256_srli_epi64::<26>(c8));
+            c8 = _mm256_and_si256(c8, m26);
+            c0 = _mm256_add_epi64(c0, _mm256_mul_epu32(_mm256_srli_epi64::<25>(c9), k19));
+            c9 = _mm256_and_si256(c9, m25);
+            c1 = _mm256_add_epi64(c1, _mm256_srli_epi64::<26>(c0));
+            c0 = _mm256_and_si256(c0, m26);
 
-                Self([c0, c1, c2, c3, c4, c5, c6, c7, c8, c9])
+            Self([c0, c1, c2, c3, c4, c5, c6, c7, c8, c9])
         }
 
         #[inline]
         #[target_feature(enable = "avx2")]
         unsafe fn mul(a: &Self, b: &Self) -> Self {
-                let k19 = _mm256_set1_epi64x(19);
-                let m26 = _mm256_set1_epi64x(MASK26 as i64);
-                let m25 = _mm256_set1_epi64x(MASK25 as i64);
+            let k19 = _mm256_set1_epi64x(19);
+            let m26 = _mm256_set1_epi64x(MASK26 as i64);
+            let m25 = _mm256_set1_epi64x(MASK25 as i64);
 
-                let a0 = a.0[0];
-                let a1 = a.0[1];
-                let a2 = a.0[2];
-                let a3 = a.0[3];
-                let a4 = a.0[4];
-                let a5 = a.0[5];
-                let a6 = a.0[6];
-                let a7 = a.0[7];
-                let a8 = a.0[8];
-                let a9 = a.0[9];
+            let a0 = a.0[0];
+            let a1 = a.0[1];
+            let a2 = a.0[2];
+            let a3 = a.0[3];
+            let a4 = a.0[4];
+            let a5 = a.0[5];
+            let a6 = a.0[6];
+            let a7 = a.0[7];
+            let a8 = a.0[8];
+            let a9 = a.0[9];
 
-                let b0 = b.0[0];
-                let b1 = b.0[1];
-                let b2 = b.0[2];
-                let b3 = b.0[3];
-                let b4 = b.0[4];
-                let b5 = b.0[5];
-                let b6 = b.0[6];
-                let b7 = b.0[7];
-                let b8 = b.0[8];
-                let b9 = b.0[9];
+            let b0 = b.0[0];
+            let b1 = b.0[1];
+            let b2 = b.0[2];
+            let b3 = b.0[3];
+            let b4 = b.0[4];
+            let b5 = b.0[5];
+            let b6 = b.0[6];
+            let b7 = b.0[7];
+            let b8 = b.0[8];
+            let b9 = b.0[9];
 
-                let a1_2 = _mm256_slli_epi64::<1>(a1);
-                let a3_2 = _mm256_slli_epi64::<1>(a3);
-                let a5_2 = _mm256_slli_epi64::<1>(a5);
-                let a7_2 = _mm256_slli_epi64::<1>(a7);
-                let a9_2 = _mm256_slli_epi64::<1>(a9);
+            let a1_2 = _mm256_slli_epi64::<1>(a1);
+            let a3_2 = _mm256_slli_epi64::<1>(a3);
+            let a5_2 = _mm256_slli_epi64::<1>(a5);
+            let a7_2 = _mm256_slli_epi64::<1>(a7);
+            let a9_2 = _mm256_slli_epi64::<1>(a9);
 
-                let b1_19 = _mm256_mul_epu32(b1, k19);
-                let b2_19 = _mm256_mul_epu32(b2, k19);
-                let b3_19 = _mm256_mul_epu32(b3, k19);
-                let b4_19 = _mm256_mul_epu32(b4, k19);
-                let b5_19 = _mm256_mul_epu32(b5, k19);
-                let b6_19 = _mm256_mul_epu32(b6, k19);
-                let b7_19 = _mm256_mul_epu32(b7, k19);
-                let b8_19 = _mm256_mul_epu32(b8, k19);
-                let b9_19 = _mm256_mul_epu32(b9, k19);
+            let b1_19 = _mm256_mul_epu32(b1, k19);
+            let b2_19 = _mm256_mul_epu32(b2, k19);
+            let b3_19 = _mm256_mul_epu32(b3, k19);
+            let b4_19 = _mm256_mul_epu32(b4, k19);
+            let b5_19 = _mm256_mul_epu32(b5, k19);
+            let b6_19 = _mm256_mul_epu32(b6, k19);
+            let b7_19 = _mm256_mul_epu32(b7, k19);
+            let b8_19 = _mm256_mul_epu32(b8, k19);
+            let b9_19 = _mm256_mul_epu32(b9, k19);
 
-                macro_rules! mac {
-                    ($acc:expr, $x:expr, $y:expr) => {
-                        $acc = _mm256_add_epi64($acc, _mm256_mul_epu32($x, $y))
-                    };
-                }
+            macro_rules! mac {
+                ($acc:expr, $x:expr, $y:expr) => {
+                    $acc = _mm256_add_epi64($acc, _mm256_mul_epu32($x, $y))
+                };
+            }
 
-                let mut t0 = _mm256_mul_epu32(a0, b0);
-                mac!(t0, a1_2, b9_19);
-                mac!(t0, a2, b8_19);
-                mac!(t0, a3_2, b7_19);
-                mac!(t0, a4, b6_19);
-                mac!(t0, a5_2, b5_19);
-                mac!(t0, a6, b4_19);
-                mac!(t0, a7_2, b3_19);
-                mac!(t0, a8, b2_19);
-                mac!(t0, a9_2, b1_19);
+            let mut t0 = _mm256_mul_epu32(a0, b0);
+            mac!(t0, a1_2, b9_19);
+            mac!(t0, a2, b8_19);
+            mac!(t0, a3_2, b7_19);
+            mac!(t0, a4, b6_19);
+            mac!(t0, a5_2, b5_19);
+            mac!(t0, a6, b4_19);
+            mac!(t0, a7_2, b3_19);
+            mac!(t0, a8, b2_19);
+            mac!(t0, a9_2, b1_19);
 
-                let mut t1 = _mm256_mul_epu32(a0, b1);
-                mac!(t1, a1, b0);
-                mac!(t1, a2, b9_19);
-                mac!(t1, a3, b8_19);
-                mac!(t1, a4, b7_19);
-                mac!(t1, a5, b6_19);
-                mac!(t1, a6, b5_19);
-                mac!(t1, a7, b4_19);
-                mac!(t1, a8, b3_19);
-                mac!(t1, a9, b2_19);
+            let mut t1 = _mm256_mul_epu32(a0, b1);
+            mac!(t1, a1, b0);
+            mac!(t1, a2, b9_19);
+            mac!(t1, a3, b8_19);
+            mac!(t1, a4, b7_19);
+            mac!(t1, a5, b6_19);
+            mac!(t1, a6, b5_19);
+            mac!(t1, a7, b4_19);
+            mac!(t1, a8, b3_19);
+            mac!(t1, a9, b2_19);
 
-                let mut t2 = _mm256_mul_epu32(a0, b2);
-                mac!(t2, a1_2, b1);
-                mac!(t2, a2, b0);
-                mac!(t2, a3_2, b9_19);
-                mac!(t2, a4, b8_19);
-                mac!(t2, a5_2, b7_19);
-                mac!(t2, a6, b6_19);
-                mac!(t2, a7_2, b5_19);
-                mac!(t2, a8, b4_19);
-                mac!(t2, a9_2, b3_19);
+            let mut t2 = _mm256_mul_epu32(a0, b2);
+            mac!(t2, a1_2, b1);
+            mac!(t2, a2, b0);
+            mac!(t2, a3_2, b9_19);
+            mac!(t2, a4, b8_19);
+            mac!(t2, a5_2, b7_19);
+            mac!(t2, a6, b6_19);
+            mac!(t2, a7_2, b5_19);
+            mac!(t2, a8, b4_19);
+            mac!(t2, a9_2, b3_19);
 
-                let mut t3 = _mm256_mul_epu32(a0, b3);
-                mac!(t3, a1, b2);
-                mac!(t3, a2, b1);
-                mac!(t3, a3, b0);
-                mac!(t3, a4, b9_19);
-                mac!(t3, a5, b8_19);
-                mac!(t3, a6, b7_19);
-                mac!(t3, a7, b6_19);
-                mac!(t3, a8, b5_19);
-                mac!(t3, a9, b4_19);
+            let mut t3 = _mm256_mul_epu32(a0, b3);
+            mac!(t3, a1, b2);
+            mac!(t3, a2, b1);
+            mac!(t3, a3, b0);
+            mac!(t3, a4, b9_19);
+            mac!(t3, a5, b8_19);
+            mac!(t3, a6, b7_19);
+            mac!(t3, a7, b6_19);
+            mac!(t3, a8, b5_19);
+            mac!(t3, a9, b4_19);
 
-                let mut t4 = _mm256_mul_epu32(a0, b4);
-                mac!(t4, a1_2, b3);
-                mac!(t4, a2, b2);
-                mac!(t4, a3_2, b1);
-                mac!(t4, a4, b0);
-                mac!(t4, a5_2, b9_19);
-                mac!(t4, a6, b8_19);
-                mac!(t4, a7_2, b7_19);
-                mac!(t4, a8, b6_19);
-                mac!(t4, a9_2, b5_19);
+            let mut t4 = _mm256_mul_epu32(a0, b4);
+            mac!(t4, a1_2, b3);
+            mac!(t4, a2, b2);
+            mac!(t4, a3_2, b1);
+            mac!(t4, a4, b0);
+            mac!(t4, a5_2, b9_19);
+            mac!(t4, a6, b8_19);
+            mac!(t4, a7_2, b7_19);
+            mac!(t4, a8, b6_19);
+            mac!(t4, a9_2, b5_19);
 
-                let mut t5 = _mm256_mul_epu32(a0, b5);
-                mac!(t5, a1, b4);
-                mac!(t5, a2, b3);
-                mac!(t5, a3, b2);
-                mac!(t5, a4, b1);
-                mac!(t5, a5, b0);
-                mac!(t5, a6, b9_19);
-                mac!(t5, a7, b8_19);
-                mac!(t5, a8, b7_19);
-                mac!(t5, a9, b6_19);
+            let mut t5 = _mm256_mul_epu32(a0, b5);
+            mac!(t5, a1, b4);
+            mac!(t5, a2, b3);
+            mac!(t5, a3, b2);
+            mac!(t5, a4, b1);
+            mac!(t5, a5, b0);
+            mac!(t5, a6, b9_19);
+            mac!(t5, a7, b8_19);
+            mac!(t5, a8, b7_19);
+            mac!(t5, a9, b6_19);
 
-                let mut t6 = _mm256_mul_epu32(a0, b6);
-                mac!(t6, a1_2, b5);
-                mac!(t6, a2, b4);
-                mac!(t6, a3_2, b3);
-                mac!(t6, a4, b2);
-                mac!(t6, a5_2, b1);
-                mac!(t6, a6, b0);
-                mac!(t6, a7_2, b9_19);
-                mac!(t6, a8, b8_19);
-                mac!(t6, a9_2, b7_19);
+            let mut t6 = _mm256_mul_epu32(a0, b6);
+            mac!(t6, a1_2, b5);
+            mac!(t6, a2, b4);
+            mac!(t6, a3_2, b3);
+            mac!(t6, a4, b2);
+            mac!(t6, a5_2, b1);
+            mac!(t6, a6, b0);
+            mac!(t6, a7_2, b9_19);
+            mac!(t6, a8, b8_19);
+            mac!(t6, a9_2, b7_19);
 
-                let mut t7 = _mm256_mul_epu32(a0, b7);
-                mac!(t7, a1, b6);
-                mac!(t7, a2, b5);
-                mac!(t7, a3, b4);
-                mac!(t7, a4, b3);
-                mac!(t7, a5, b2);
-                mac!(t7, a6, b1);
-                mac!(t7, a7, b0);
-                mac!(t7, a8, b9_19);
-                mac!(t7, a9, b8_19);
+            let mut t7 = _mm256_mul_epu32(a0, b7);
+            mac!(t7, a1, b6);
+            mac!(t7, a2, b5);
+            mac!(t7, a3, b4);
+            mac!(t7, a4, b3);
+            mac!(t7, a5, b2);
+            mac!(t7, a6, b1);
+            mac!(t7, a7, b0);
+            mac!(t7, a8, b9_19);
+            mac!(t7, a9, b8_19);
 
-                let mut t8 = _mm256_mul_epu32(a0, b8);
-                mac!(t8, a1_2, b7);
-                mac!(t8, a2, b6);
-                mac!(t8, a3_2, b5);
-                mac!(t8, a4, b4);
-                mac!(t8, a5_2, b3);
-                mac!(t8, a6, b2);
-                mac!(t8, a7_2, b1);
-                mac!(t8, a8, b0);
-                mac!(t8, a9_2, b9_19);
+            let mut t8 = _mm256_mul_epu32(a0, b8);
+            mac!(t8, a1_2, b7);
+            mac!(t8, a2, b6);
+            mac!(t8, a3_2, b5);
+            mac!(t8, a4, b4);
+            mac!(t8, a5_2, b3);
+            mac!(t8, a6, b2);
+            mac!(t8, a7_2, b1);
+            mac!(t8, a8, b0);
+            mac!(t8, a9_2, b9_19);
 
-                let mut t9 = _mm256_mul_epu32(a0, b9);
-                mac!(t9, a1, b8);
-                mac!(t9, a2, b7);
-                mac!(t9, a3, b6);
-                mac!(t9, a4, b5);
-                mac!(t9, a5, b4);
-                mac!(t9, a6, b3);
-                mac!(t9, a7, b2);
-                mac!(t9, a8, b1);
-                mac!(t9, a9, b0);
+            let mut t9 = _mm256_mul_epu32(a0, b9);
+            mac!(t9, a1, b8);
+            mac!(t9, a2, b7);
+            mac!(t9, a3, b6);
+            mac!(t9, a4, b5);
+            mac!(t9, a5, b4);
+            mac!(t9, a6, b3);
+            mac!(t9, a7, b2);
+            mac!(t9, a8, b1);
+            mac!(t9, a9, b0);
 
-                t1 = _mm256_add_epi64(t1, _mm256_srli_epi64::<26>(t0));
-                let mut r0 = _mm256_and_si256(t0, m26);
-                t2 = _mm256_add_epi64(t2, _mm256_srli_epi64::<25>(t1));
-                let mut r1 = _mm256_and_si256(t1, m25);
-                t3 = _mm256_add_epi64(t3, _mm256_srli_epi64::<26>(t2));
-                let mut r2 = _mm256_and_si256(t2, m26);
-                t4 = _mm256_add_epi64(t4, _mm256_srli_epi64::<25>(t3));
-                let r3 = _mm256_and_si256(t3, m25);
-                t5 = _mm256_add_epi64(t5, _mm256_srli_epi64::<26>(t4));
-                let r4 = _mm256_and_si256(t4, m26);
-                t6 = _mm256_add_epi64(t6, _mm256_srli_epi64::<25>(t5));
-                let r5 = _mm256_and_si256(t5, m25);
-                t7 = _mm256_add_epi64(t7, _mm256_srli_epi64::<26>(t6));
-                let r6 = _mm256_and_si256(t6, m26);
-                t8 = _mm256_add_epi64(t8, _mm256_srli_epi64::<25>(t7));
-                let r7 = _mm256_and_si256(t7, m25);
-                t9 = _mm256_add_epi64(t9, _mm256_srli_epi64::<26>(t8));
-                let r8 = _mm256_and_si256(t8, m26);
+            t1 = _mm256_add_epi64(t1, _mm256_srli_epi64::<26>(t0));
+            let mut r0 = _mm256_and_si256(t0, m26);
+            t2 = _mm256_add_epi64(t2, _mm256_srli_epi64::<25>(t1));
+            let mut r1 = _mm256_and_si256(t1, m25);
+            t3 = _mm256_add_epi64(t3, _mm256_srli_epi64::<26>(t2));
+            let mut r2 = _mm256_and_si256(t2, m26);
+            t4 = _mm256_add_epi64(t4, _mm256_srli_epi64::<25>(t3));
+            let r3 = _mm256_and_si256(t3, m25);
+            t5 = _mm256_add_epi64(t5, _mm256_srli_epi64::<26>(t4));
+            let r4 = _mm256_and_si256(t4, m26);
+            t6 = _mm256_add_epi64(t6, _mm256_srli_epi64::<25>(t5));
+            let r5 = _mm256_and_si256(t5, m25);
+            t7 = _mm256_add_epi64(t7, _mm256_srli_epi64::<26>(t6));
+            let r6 = _mm256_and_si256(t6, m26);
+            t8 = _mm256_add_epi64(t8, _mm256_srli_epi64::<25>(t7));
+            let r7 = _mm256_and_si256(t7, m25);
+            t9 = _mm256_add_epi64(t9, _mm256_srli_epi64::<26>(t8));
+            let r8 = _mm256_and_si256(t8, m26);
 
-                let c9 = _mm256_srli_epi64::<25>(t9);
-                let r9 = _mm256_and_si256(t9, m25);
-                let r0_64 = _mm256_add_epi64(r0, _mm256_mul_epu32(c9, k19));
-                r0 = _mm256_and_si256(r0_64, m26);
-                r1 = _mm256_add_epi64(r1, _mm256_srli_epi64::<26>(r0_64));
-                let r2_carry = _mm256_srli_epi64::<25>(r1);
-                r1 = _mm256_and_si256(r1, m25);
-                r2 = _mm256_add_epi64(r2, r2_carry);
+            let c9 = _mm256_srli_epi64::<25>(t9);
+            let r9 = _mm256_and_si256(t9, m25);
+            let r0_64 = _mm256_add_epi64(r0, _mm256_mul_epu32(c9, k19));
+            r0 = _mm256_and_si256(r0_64, m26);
+            r1 = _mm256_add_epi64(r1, _mm256_srli_epi64::<26>(r0_64));
+            let r2_carry = _mm256_srli_epi64::<25>(r1);
+            r1 = _mm256_and_si256(r1, m25);
+            r2 = _mm256_add_epi64(r2, r2_carry);
 
-                Self([r0, r1, r2, r3, r4, r5, r6, r7, r8, r9])
+            Self([r0, r1, r2, r3, r4, r5, r6, r7, r8, r9])
         }
 
         #[inline]
         #[target_feature(enable = "avx2")]
         unsafe fn sq(&self) -> Self {
-                let k19 = _mm256_set1_epi64x(19);
-                let m26 = _mm256_set1_epi64x(MASK26 as i64);
-                let m25 = _mm256_set1_epi64x(MASK25 as i64);
+            let k19 = _mm256_set1_epi64x(19);
+            let m26 = _mm256_set1_epi64x(MASK26 as i64);
+            let m25 = _mm256_set1_epi64x(MASK25 as i64);
 
-                let a0 = self.0[0];
-                let a1 = self.0[1];
-                let a2 = self.0[2];
-                let a3 = self.0[3];
-                let a4 = self.0[4];
-                let a5 = self.0[5];
-                let a6 = self.0[6];
-                let a7 = self.0[7];
-                let a8 = self.0[8];
-                let a9 = self.0[9];
+            let a0 = self.0[0];
+            let a1 = self.0[1];
+            let a2 = self.0[2];
+            let a3 = self.0[3];
+            let a4 = self.0[4];
+            let a5 = self.0[5];
+            let a6 = self.0[6];
+            let a7 = self.0[7];
+            let a8 = self.0[8];
+            let a9 = self.0[9];
 
-                let a0_2 = _mm256_slli_epi64::<1>(a0);
-                let a1_2 = _mm256_slli_epi64::<1>(a1);
-                let a2_2 = _mm256_slli_epi64::<1>(a2);
-                let a3_2 = _mm256_slli_epi64::<1>(a3);
-                let a4_2 = _mm256_slli_epi64::<1>(a4);
-                let a5_2 = _mm256_slli_epi64::<1>(a5);
-                let a6_2 = _mm256_slli_epi64::<1>(a6);
-                let a7_2 = _mm256_slli_epi64::<1>(a7);
-                let a8_2 = _mm256_slli_epi64::<1>(a8);
-                let a9_2 = _mm256_slli_epi64::<1>(a9);
+            let a0_2 = _mm256_slli_epi64::<1>(a0);
+            let a1_2 = _mm256_slli_epi64::<1>(a1);
+            let a2_2 = _mm256_slli_epi64::<1>(a2);
+            let a3_2 = _mm256_slli_epi64::<1>(a3);
+            let a4_2 = _mm256_slli_epi64::<1>(a4);
+            let a5_2 = _mm256_slli_epi64::<1>(a5);
+            let a6_2 = _mm256_slli_epi64::<1>(a6);
+            let a7_2 = _mm256_slli_epi64::<1>(a7);
+            let a8_2 = _mm256_slli_epi64::<1>(a8);
+            let a9_2 = _mm256_slli_epi64::<1>(a9);
 
-                let a1_4 = _mm256_slli_epi64::<2>(a1);
-                let a3_4 = _mm256_slli_epi64::<2>(a3);
-                let a5_4 = _mm256_slli_epi64::<2>(a5);
-                let a7_4 = _mm256_slli_epi64::<2>(a7);
+            let a1_4 = _mm256_slli_epi64::<2>(a1);
+            let a3_4 = _mm256_slli_epi64::<2>(a3);
+            let a5_4 = _mm256_slli_epi64::<2>(a5);
+            let a7_4 = _mm256_slli_epi64::<2>(a7);
 
-                let a5_19 = _mm256_mul_epu32(a5, k19);
-                let a6_19 = _mm256_mul_epu32(a6, k19);
-                let a7_19 = _mm256_mul_epu32(a7, k19);
-                let a8_19 = _mm256_mul_epu32(a8, k19);
-                let a9_19 = _mm256_mul_epu32(a9, k19);
+            let a5_19 = _mm256_mul_epu32(a5, k19);
+            let a6_19 = _mm256_mul_epu32(a6, k19);
+            let a7_19 = _mm256_mul_epu32(a7, k19);
+            let a8_19 = _mm256_mul_epu32(a8, k19);
+            let a9_19 = _mm256_mul_epu32(a9, k19);
 
-                macro_rules! mac {
-                    ($acc:expr, $x:expr, $y:expr) => {
-                        $acc = _mm256_add_epi64($acc, _mm256_mul_epu32($x, $y))
-                    };
-                }
+            macro_rules! mac {
+                ($acc:expr, $x:expr, $y:expr) => {
+                    $acc = _mm256_add_epi64($acc, _mm256_mul_epu32($x, $y))
+                };
+            }
 
-                let mut t0 = _mm256_mul_epu32(a0, a0);
-                mac!(t0, a1_4, a9_19);
-                mac!(t0, a2_2, a8_19);
-                mac!(t0, a3_4, a7_19);
-                mac!(t0, a4_2, a6_19);
-                mac!(t0, a5_2, a5_19);
+            let mut t0 = _mm256_mul_epu32(a0, a0);
+            mac!(t0, a1_4, a9_19);
+            mac!(t0, a2_2, a8_19);
+            mac!(t0, a3_4, a7_19);
+            mac!(t0, a4_2, a6_19);
+            mac!(t0, a5_2, a5_19);
 
-                let mut t1 = _mm256_mul_epu32(a0_2, a1);
-                mac!(t1, a2_2, a9_19);
-                mac!(t1, a3_2, a8_19);
-                mac!(t1, a4_2, a7_19);
-                mac!(t1, a5_2, a6_19);
+            let mut t1 = _mm256_mul_epu32(a0_2, a1);
+            mac!(t1, a2_2, a9_19);
+            mac!(t1, a3_2, a8_19);
+            mac!(t1, a4_2, a7_19);
+            mac!(t1, a5_2, a6_19);
 
-                let mut t2 = _mm256_mul_epu32(a0_2, a2);
-                mac!(t2, a1_2, a1);
-                mac!(t2, a3_4, a9_19);
-                mac!(t2, a4_2, a8_19);
-                mac!(t2, a5_4, a7_19);
-                mac!(t2, a6, a6_19);
+            let mut t2 = _mm256_mul_epu32(a0_2, a2);
+            mac!(t2, a1_2, a1);
+            mac!(t2, a3_4, a9_19);
+            mac!(t2, a4_2, a8_19);
+            mac!(t2, a5_4, a7_19);
+            mac!(t2, a6, a6_19);
 
-                let mut t3 = _mm256_mul_epu32(a0_2, a3);
-                mac!(t3, a1_2, a2);
-                mac!(t3, a4_2, a9_19);
-                mac!(t3, a5_2, a8_19);
-                mac!(t3, a6_2, a7_19);
+            let mut t3 = _mm256_mul_epu32(a0_2, a3);
+            mac!(t3, a1_2, a2);
+            mac!(t3, a4_2, a9_19);
+            mac!(t3, a5_2, a8_19);
+            mac!(t3, a6_2, a7_19);
 
-                let mut t4 = _mm256_mul_epu32(a0_2, a4);
-                mac!(t4, a1_2, a3_2);
-                mac!(t4, a2, a2);
-                mac!(t4, a5_4, a9_19);
-                mac!(t4, a6_2, a8_19);
-                mac!(t4, a7_2, a7_19);
+            let mut t4 = _mm256_mul_epu32(a0_2, a4);
+            mac!(t4, a1_2, a3_2);
+            mac!(t4, a2, a2);
+            mac!(t4, a5_4, a9_19);
+            mac!(t4, a6_2, a8_19);
+            mac!(t4, a7_2, a7_19);
 
-                let mut t5 = _mm256_mul_epu32(a0_2, a5);
-                mac!(t5, a1_2, a4);
-                mac!(t5, a2_2, a3);
-                mac!(t5, a6_2, a9_19);
-                mac!(t5, a7_2, a8_19);
+            let mut t5 = _mm256_mul_epu32(a0_2, a5);
+            mac!(t5, a1_2, a4);
+            mac!(t5, a2_2, a3);
+            mac!(t5, a6_2, a9_19);
+            mac!(t5, a7_2, a8_19);
 
-                let mut t6 = _mm256_mul_epu32(a0_2, a6);
-                mac!(t6, a1_2, a5_2);
-                mac!(t6, a2_2, a4);
-                mac!(t6, a3_2, a3);
-                mac!(t6, a7_4, a9_19);
-                mac!(t6, a8, a8_19);
+            let mut t6 = _mm256_mul_epu32(a0_2, a6);
+            mac!(t6, a1_2, a5_2);
+            mac!(t6, a2_2, a4);
+            mac!(t6, a3_2, a3);
+            mac!(t6, a7_4, a9_19);
+            mac!(t6, a8, a8_19);
 
-                let mut t7 = _mm256_mul_epu32(a0_2, a7);
-                mac!(t7, a1_2, a6);
-                mac!(t7, a2_2, a5);
-                mac!(t7, a3_2, a4);
-                mac!(t7, a8_2, a9_19);
+            let mut t7 = _mm256_mul_epu32(a0_2, a7);
+            mac!(t7, a1_2, a6);
+            mac!(t7, a2_2, a5);
+            mac!(t7, a3_2, a4);
+            mac!(t7, a8_2, a9_19);
 
-                let mut t8 = _mm256_mul_epu32(a0_2, a8);
-                mac!(t8, a1_2, a7_2);
-                mac!(t8, a2_2, a6);
-                mac!(t8, a3_2, a5_2);
-                mac!(t8, a4, a4);
-                mac!(t8, a9_2, a9_19);
+            let mut t8 = _mm256_mul_epu32(a0_2, a8);
+            mac!(t8, a1_2, a7_2);
+            mac!(t8, a2_2, a6);
+            mac!(t8, a3_2, a5_2);
+            mac!(t8, a4, a4);
+            mac!(t8, a9_2, a9_19);
 
-                let mut t9 = _mm256_mul_epu32(a0_2, a9);
-                mac!(t9, a1_2, a8);
-                mac!(t9, a2_2, a7);
-                mac!(t9, a3_2, a6);
-                mac!(t9, a4_2, a5);
+            let mut t9 = _mm256_mul_epu32(a0_2, a9);
+            mac!(t9, a1_2, a8);
+            mac!(t9, a2_2, a7);
+            mac!(t9, a3_2, a6);
+            mac!(t9, a4_2, a5);
 
-                t1 = _mm256_add_epi64(t1, _mm256_srli_epi64::<26>(t0));
-                let mut r0 = _mm256_and_si256(t0, m26);
-                t2 = _mm256_add_epi64(t2, _mm256_srli_epi64::<25>(t1));
-                let mut r1 = _mm256_and_si256(t1, m25);
-                t3 = _mm256_add_epi64(t3, _mm256_srli_epi64::<26>(t2));
-                let mut r2 = _mm256_and_si256(t2, m26);
-                t4 = _mm256_add_epi64(t4, _mm256_srli_epi64::<25>(t3));
-                let r3 = _mm256_and_si256(t3, m25);
-                t5 = _mm256_add_epi64(t5, _mm256_srli_epi64::<26>(t4));
-                let r4 = _mm256_and_si256(t4, m26);
-                t6 = _mm256_add_epi64(t6, _mm256_srli_epi64::<25>(t5));
-                let r5 = _mm256_and_si256(t5, m25);
-                t7 = _mm256_add_epi64(t7, _mm256_srli_epi64::<26>(t6));
-                let r6 = _mm256_and_si256(t6, m26);
-                t8 = _mm256_add_epi64(t8, _mm256_srli_epi64::<25>(t7));
-                let r7 = _mm256_and_si256(t7, m25);
-                t9 = _mm256_add_epi64(t9, _mm256_srli_epi64::<26>(t8));
-                let r8 = _mm256_and_si256(t8, m26);
+            t1 = _mm256_add_epi64(t1, _mm256_srli_epi64::<26>(t0));
+            let mut r0 = _mm256_and_si256(t0, m26);
+            t2 = _mm256_add_epi64(t2, _mm256_srli_epi64::<25>(t1));
+            let mut r1 = _mm256_and_si256(t1, m25);
+            t3 = _mm256_add_epi64(t3, _mm256_srli_epi64::<26>(t2));
+            let mut r2 = _mm256_and_si256(t2, m26);
+            t4 = _mm256_add_epi64(t4, _mm256_srli_epi64::<25>(t3));
+            let r3 = _mm256_and_si256(t3, m25);
+            t5 = _mm256_add_epi64(t5, _mm256_srli_epi64::<26>(t4));
+            let r4 = _mm256_and_si256(t4, m26);
+            t6 = _mm256_add_epi64(t6, _mm256_srli_epi64::<25>(t5));
+            let r5 = _mm256_and_si256(t5, m25);
+            t7 = _mm256_add_epi64(t7, _mm256_srli_epi64::<26>(t6));
+            let r6 = _mm256_and_si256(t6, m26);
+            t8 = _mm256_add_epi64(t8, _mm256_srli_epi64::<25>(t7));
+            let r7 = _mm256_and_si256(t7, m25);
+            t9 = _mm256_add_epi64(t9, _mm256_srli_epi64::<26>(t8));
+            let r8 = _mm256_and_si256(t8, m26);
 
-                let c9 = _mm256_srli_epi64::<25>(t9);
-                let r9 = _mm256_and_si256(t9, m25);
-                let r0_64 = _mm256_add_epi64(r0, _mm256_mul_epu32(c9, k19));
-                r0 = _mm256_and_si256(r0_64, m26);
-                r1 = _mm256_add_epi64(r1, _mm256_srli_epi64::<26>(r0_64));
-                let r2_carry = _mm256_srli_epi64::<25>(r1);
-                r1 = _mm256_and_si256(r1, m25);
-                r2 = _mm256_add_epi64(r2, r2_carry);
+            let c9 = _mm256_srli_epi64::<25>(t9);
+            let r9 = _mm256_and_si256(t9, m25);
+            let r0_64 = _mm256_add_epi64(r0, _mm256_mul_epu32(c9, k19));
+            r0 = _mm256_and_si256(r0_64, m26);
+            r1 = _mm256_add_epi64(r1, _mm256_srli_epi64::<26>(r0_64));
+            let r2_carry = _mm256_srli_epi64::<25>(r1);
+            r1 = _mm256_and_si256(r1, m25);
+            r2 = _mm256_add_epi64(r2, r2_carry);
 
-                Self([r0, r1, r2, r3, r4, r5, r6, r7, r8, r9])
+            Self([r0, r1, r2, r3, r4, r5, r6, r7, r8, r9])
         }
 
         #[inline]
@@ -607,18 +602,12 @@ pub(super) mod avx2 {
                 let overflow = _mm256_srli_epi64::<25>(t9);
                 let mask = _mm256_sub_epi64(_mm256_setzero_si256(), overflow);
 
-                let r0 = _mm256_or_si256(
-                    _mm256_andnot_si256(mask, h[0]),
-                    _mm256_and_si256(mask, t0),
-                );
-                let r1 = _mm256_or_si256(
-                    _mm256_andnot_si256(mask, h[1]),
-                    _mm256_and_si256(mask, t1),
-                );
-                let r2 = _mm256_or_si256(
-                    _mm256_andnot_si256(mask, h[2]),
-                    _mm256_and_si256(mask, t2),
-                );
+                let r0 =
+                    _mm256_or_si256(_mm256_andnot_si256(mask, h[0]), _mm256_and_si256(mask, t0));
+                let r1 =
+                    _mm256_or_si256(_mm256_andnot_si256(mask, h[1]), _mm256_and_si256(mask, t1));
+                let r2 =
+                    _mm256_or_si256(_mm256_andnot_si256(mask, h[2]), _mm256_and_si256(mask, t2));
 
                 // First 64 bits: r0[26] | r1[25] | r2[13]
                 let packed = _mm256_or_si256(
@@ -653,7 +642,6 @@ pub(super) mod avx2 {
             (l[4] >> 26) & MASK25,
         ]
     }
-
 
     #[derive(Clone, Copy)]
     struct MontPoint4 {
@@ -751,8 +739,18 @@ pub(super) mod avx2 {
                 }
 
                 let mut prev4 = MontPoint4 {
-                    u: Fe4::from_4_fe([&prev_pts[0].u, &prev_pts[1].u, &prev_pts[2].u, &prev_pts[3].u]),
-                    w: Fe4::from_4_fe([&prev_pts[0].w, &prev_pts[1].w, &prev_pts[2].w, &prev_pts[3].w]),
+                    u: Fe4::from_4_fe([
+                        &prev_pts[0].u,
+                        &prev_pts[1].u,
+                        &prev_pts[2].u,
+                        &prev_pts[3].u,
+                    ]),
+                    w: Fe4::from_4_fe([
+                        &prev_pts[0].w,
+                        &prev_pts[1].w,
+                        &prev_pts[2].w,
+                        &prev_pts[3].w,
+                    ]),
                 };
                 let mut cur4 = MontPoint4 {
                     u: Fe4::from_4_fe([&cur_pts[0].u, &cur_pts[1].u, &cur_pts[2].u, &cur_pts[3].u]),

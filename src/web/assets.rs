@@ -3,7 +3,7 @@
 use axum::{
     body::Body,
     extract::Request,
-    http::{header, Method, StatusCode},
+    http::{Method, StatusCode, header},
     response::{IntoResponse, Response},
 };
 

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Copy, Play, Trash2, FolderKey, ChevronUp } from '@lucide/svelte';
+  import { Copy, Download, Play, Trash2, FolderKey, ChevronUp } from '@lucide/svelte';
   import { formatRelativeTime, store } from '../lib/store.svelte';
   const C = 2 * Math.PI * 9;
 </script>
@@ -58,6 +58,9 @@
             {/if}
             <button class="btn-icon" title="Copy .onion address" aria-label="Copy .onion address" onclick={() => store.copyText(entry.best_address, 'Copied .onion address')}>
               <Copy size={14} />
+            </button>
+            <button class="btn-icon" title="Export .tar archive" aria-label="Export .tar archive" onclick={() => store.exportMint(entry.target)}>
+              <Download size={14} />
             </button>
             <button class="btn-icon del" title="Delete saved mint" aria-label="Delete saved mint" onclick={() => store.deleteMint(entry.target)}>
               <Trash2 size={14} />

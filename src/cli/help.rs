@@ -93,9 +93,24 @@ pub(crate) fn show(flags: OutputFlags, command: Option<&str>) {
     match cmd {
         "mint" => {
             help_group(flags, "Options");
-            option(flags, "--threads <n>", "-t", "Worker threads (default: CPU cores)");
-            option(flags, "--engine <kind>", "-e", "Minting engine: auto, cpu, or gpu (default: auto)");
-            option(flags, "--out <dir>", "-o", "Base output directory (default: ./mints)");
+            option(
+                flags,
+                "--threads <n>",
+                "-t",
+                "Worker threads (default: CPU cores)",
+            );
+            option(
+                flags,
+                "--engine <kind>",
+                "-e",
+                "Minting engine: auto, cpu, gpu, or hybrid (default: auto)",
+            );
+            option(
+                flags,
+                "--out <dir>",
+                "-o",
+                "Base output directory (default: ./mints)",
+            );
             option(flags, "--quiet", "-q", "Print final .onion address only");
             option(flags, "--no-color", "", "Disable ANSI colors");
             option(flags, "--help", "-h", "Show help");
@@ -105,26 +120,55 @@ pub(crate) fn show(flags: OutputFlags, command: Option<&str>) {
         }
         "ui" => {
             help_group(flags, "Options");
-            option(flags, "--port <port>", "-p", "Port to bind (default: 0 desktop, 8080 web)");
-            option(flags, "--bind <ip>", "-b", "Bind address (default: 127.0.0.1)");
-            option(flags, "--web", "", "Serve Web UI only (skip desktop window)");
-            option(flags, "--out <dir>", "-o", "Base output directory (default: ./mints)");
+            option(
+                flags,
+                "--port <port>",
+                "-p",
+                "Port to bind (default: 0 desktop, 8080 web)",
+            );
+            option(
+                flags,
+                "--bind <ip>",
+                "-b",
+                "Bind address (default: 127.0.0.1)",
+            );
+            option(
+                flags,
+                "--web",
+                "",
+                "Serve Web UI only (skip desktop window)",
+            );
+            option(
+                flags,
+                "--engine <kind>",
+                "-e",
+                "Minting engine: auto, cpu, gpu, or hybrid (default: auto)",
+            );
+            option(
+                flags,
+                "--out <dir>",
+                "-o",
+                "Base output directory (default: ./mints)",
+            );
             option(flags, "--help", "-h", "Show help");
             help_group(flags, "Examples");
             help_item(flags, "onyun ui", Color::Dim);
-            help_item(flags, "onyun ui --web --bind 0.0.0.0 --port 8080", Color::Dim);
+            help_item(
+                flags,
+                "onyun ui --web --bind 0.0.0.0 --port 8080",
+                Color::Dim,
+            );
         }
         _ => {
             help_group(flags, "Commands");
             for (name, desc) in [
-                ("mint", "Mint a Tor v3 address left-to-right in the terminal"),
+                (
+                    "mint",
+                    "Mint a Tor v3 address left-to-right in the terminal",
+                ),
                 ("ui", "Launch the Onyun desktop window or headless Web UI"),
             ] {
-                help_item(
-                    flags,
-                    &format!("{}  {desc}", column(name, 14)),
-                    Color::Text,
-                );
+                help_item(flags, &format!("{}  {desc}", column(name, 14)), Color::Text);
             }
 
             help_group(flags, "Global settings");
@@ -137,7 +181,11 @@ pub(crate) fn show(flags: OutputFlags, command: Option<&str>) {
             help_item(flags, "onyun mint onyunshop --threads 16", Color::Dim);
             help_item(flags, "onyun ui --web --port 8080", Color::Dim);
             help_blank();
-            help_line(flags, "Run onyun <command> --help for command options.", Color::Dim);
+            help_line(
+                flags,
+                "Run onyun <command> --help for command options.",
+                Color::Dim,
+            );
         }
     }
     help_blank();

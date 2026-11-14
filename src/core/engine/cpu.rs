@@ -3,20 +3,18 @@
 //! scalar fallback), and Montgomery batch inversion over GF(2^255 - 19).
 
 use crate::core::base32::PrefixMatcher;
-use crate::core::engine::helper::{derive_expanded_secret, Fe, MontPoint, MontStep};
 #[cfg(test)]
 use crate::core::engine::helper::{CachedStep, ExtPoint};
-use crate::core::engine::{
-    EngineHandle, MintConfig, MintEngine, MintMilestone, SharedTelemetry,
-};
-use crate::core::onion::{derive_address, OnionKeypair};
+use crate::core::engine::helper::{Fe, MontPoint, MontStep, derive_expanded_secret};
+use crate::core::engine::{EngineHandle, MintConfig, MintEngine, MintMilestone, SharedTelemetry};
+use crate::core::onion::{OnionKeypair, derive_address};
 use anyhow::Result;
 use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
 use curve25519_dalek::scalar::Scalar;
 use rand::Rng;
 use sha2::{Digest, Sha512};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc::Sender, Arc};
+use std::sync::{Arc, mpsc::Sender};
 use std::thread;
 
 const STREAMS: usize = 4;
@@ -49,7 +47,15 @@ impl MintEngine for CpuMkEngine {
                 }
             }
         }
-        format!("{} ({} cores)", std::env::consts::ARCH, crate::cli::args::default_threads())
+        format!(
+            "{} ({} cores)",
+            std::env::consts::ARCH,
+            crate::cli::args::default_threads()
+        )
+    }
+
+    fn slot_count(&self, cpu_threads: usize) -> usize {
+        cpu_threads.max(1)
     }
 
     fn start(
@@ -70,6 +76,7 @@ impl MintEngine for CpuMkEngine {
         let use_avx2 = false;
 
         for thread_idx in 0..config.threads {
+            let telemetry_slot = config.telemetry_offset + thread_idx;
             let matcher = matcher.clone();
             let telemetry = Arc::clone(&telemetry);
             let on_milestone = on_milestone.clone();
@@ -83,7 +90,7 @@ impl MintEngine for CpuMkEngine {
                         // SAFETY: `is_x86_feature_detected!("avx2")` checked above.
                         unsafe {
                             crate::core::engine::simd::avx2::worker_loop_avx2(
-                                thread_idx,
+                                telemetry_slot,
                                 &matcher,
                                 step_mont,
                                 &telemetry,
@@ -95,7 +102,7 @@ impl MintEngine for CpuMkEngine {
                     }
                     let _ = use_avx2;
                     worker_loop(
-                        thread_idx,
+                        telemetry_slot,
                         &matcher,
                         step_mont,
                         &telemetry,
@@ -269,7 +276,6 @@ fn worker_loop(
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,12 +296,20 @@ mod tests {
 
         let base_pt = ED25519_BASEPOINT_POINT * base;
         let mut ext = ExtPoint::from_dalek(&base_pt);
-        assert_eq!(ext.y.to_bytes(), {
-            let mut b = *base_pt.compress().as_bytes();
-            b[31] &= 0x7f;
-            b
-        }, "from_dalek y");
-        assert_eq!(Fe::mul(&ext.x, &ext.x.invert()).to_bytes(), Fe::ONE.to_bytes(), "invert");
+        assert_eq!(
+            ext.y.to_bytes(),
+            {
+                let mut b = *base_pt.compress().as_bytes();
+                b[31] &= 0x7f;
+                b
+            },
+            "from_dalek y"
+        );
+        assert_eq!(
+            Fe::mul(&ext.x, &ext.x.invert()).to_bytes(),
+            Fe::ONE.to_bytes(),
+            "invert"
+        );
         let expected_0 = base_pt.compress().to_bytes();
         let mut got_0 = ext.y.to_bytes();
         got_0[31] |= (ext.x.to_bytes()[0] & 1) << 7;
@@ -346,8 +360,8 @@ mod tests {
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         ];
         let encoded = crate::core::base32::encode_onion_bytes(&[
-            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7], 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7], 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         ]);
         let target = std::str::from_utf8(&encoded[..12]).unwrap_or("");
         let matcher = PrefixMatcher::new(target);

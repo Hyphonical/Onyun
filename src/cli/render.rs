@@ -62,7 +62,10 @@ pub(crate) fn event(flags: OutputFlags, command: &str, message: &str) {
         return;
     }
     if interactive() {
-        eprintln!("  {}", style::paint(&clean(message), Color::Text, colored(flags)));
+        eprintln!(
+            "  {}",
+            style::paint(&clean(message), Color::Text, colored(flags))
+        );
     } else {
         eprintln!("{}  {command}  {}", utc_timestamp(), clean(message));
     }

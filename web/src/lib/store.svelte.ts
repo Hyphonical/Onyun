@@ -1,6 +1,6 @@
 import { api } from './api';
 import { subscribeEvents } from './sse';
-import type { MintSnapshot, SavedMintEntry, Scene, Tab } from './types';
+import type { ComputeDevice, EngineMode, MintSnapshot, SavedMintEntry, Scene, Tab } from './types';
 
 const BASE32_RE = /^[a-z2-7]+$/;
 const SPARKLINE_POINTS = 60;
@@ -29,16 +29,18 @@ class OnyunStore {
   mobileNavOpen = $state(false);
   drawerOpen = $state(false);
 
-  version = $state('0.1.0');
+  version = $state('0.2.0');
   engine = $state('CPU');
+  engineMode = $state<EngineMode>('auto');
   deviceName = $state('CPU');
+  devices = $state<ComputeDevice[]>([]);
+  enabledDevices = $state<string[]>([]);
   cpuThreads = $state(4);
   outDir = $state('./mints');
   authRequired = $state(false);
 
   targetInput = $state('onyun');
   threadsInput = $state(4);
-
   snapshot = $state<MintSnapshot>({ ...emptySnapshot });
   rateHistory = $state<number[]>([]);
   mints = $state<SavedMintEntry[]>([]);
@@ -104,7 +106,12 @@ class OnyunStore {
       const status = await api.status();
       this.version = status.version;
       this.engine = status.engine;
+      this.engineMode = status.engine_kind ?? 'auto';
       this.deviceName = status.device_name || status.engine;
+      this.devices = status.devices ?? [];
+      if (this.enabledDevices.length === 0 && this.devices.length > 0) {
+        this.enabledDevices = this.devices.map((d) => d.id);
+      }
       this.cpuThreads = status.cpu_threads;
       this.threadsInput = status.cpu_threads;
       this.outDir = status.out_dir;
@@ -125,6 +132,59 @@ class OnyunStore {
     } catch {
       this.scene = 'workspace';
       this.toast('Failed to reach Onyun backend');
+    }
+  }
+
+  get hasGpu(): boolean {
+    return this.devices.some((d) => d.kind === 'gpu');
+  }
+
+  get activeDeviceSummary(): string {
+    if (this.devices.length === 0) return this.deviceName;
+    if (this.engineMode === 'cpu') {
+      return this.devices.find((d) => d.kind === 'cpu')?.name ?? 'CPU';
+    }
+    if (this.engineMode === 'gpu' || this.engineMode === 'auto') {
+      const gpus = this.devices.filter((d) => d.kind === 'gpu' && this.enabledDevices.includes(d.id));
+      if (gpus.length > 0) return gpus.map((d) => d.name).join(' + ');
+      return this.devices.find((d) => d.kind === 'cpu')?.name ?? this.deviceName;
+    }
+    const active = this.devices.filter((d) => this.enabledDevices.includes(d.id));
+    return active.length > 0 ? active.map((d) => d.name).join(' + ') : this.deviceName;
+  }
+
+  get usesCpu(): boolean {
+    if (this.engineMode === 'cpu') return true;
+    if (this.engineMode === 'hybrid') return this.enabledDevices.includes('cpu');
+    return !this.hasGpu;
+  }
+
+  toggleDevice(id: string) {
+    if (this.snapshot.active) return;
+    if (this.enabledDevices.includes(id)) {
+      if (this.enabledDevices.length <= 1) {
+        this.toast('At least one compute device must stay enabled');
+        return;
+      }
+      this.enabledDevices = this.enabledDevices.filter((x) => x !== id);
+    } else {
+      this.enabledDevices = [...this.enabledDevices, id];
+    }
+    if (this.engineMode !== 'hybrid') {
+      this.engineMode = 'hybrid';
+    }
+  }
+
+  setEngineMode(mode: EngineMode) {
+    if (this.snapshot.active) return;
+    this.engineMode = mode;
+    if (mode === 'cpu') {
+      this.enabledDevices = this.devices.filter((d) => d.kind === 'cpu').map((d) => d.id);
+    } else if (mode === 'gpu') {
+      const gpus = this.devices.filter((d) => d.kind === 'gpu').map((d) => d.id);
+      if (gpus.length > 0) this.enabledDevices = gpus;
+    } else if (mode === 'hybrid' && this.enabledDevices.length === 0) {
+      this.enabledDevices = this.devices.map((d) => d.id);
     }
   }
 
@@ -182,7 +242,11 @@ class OnyunStore {
     this.rateHistory = [];
     this.lastBestLen = 0;
     try {
-      const snap = await api.startMint(t, this.threadsInput);
+      const deviceFilter =
+        this.engineMode === 'hybrid' || this.engineMode === 'gpu' || this.engineMode === 'auto'
+          ? this.enabledDevices
+          : undefined;
+      const snap = await api.startMint(t, this.threadsInput, this.engineMode, deviceFilter);
       this.applySnapshot(snap);
       this.tab = 'mint';
       await this.refreshMints();
@@ -223,6 +287,20 @@ class OnyunStore {
     } catch (err) {
       this.toast(err instanceof Error ? err.message : 'Failed to delete mint');
     }
+  }
+
+  exportMint(target?: string) {
+    const t = target ?? (this.snapshot.target || this.mints[0]?.target);
+    if (!t) {
+      this.toast('No saved mint available to export');
+      return;
+    }
+    const a = document.createElement('a');
+    a.href = api.exportMintUrl(t);
+    a.download = `${t}.tar`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
   }
 
   async copyText(value: string, label = 'Copied to clipboard') {

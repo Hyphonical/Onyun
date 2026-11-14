@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Tween } from 'svelte/motion';
-  import { Play, Square, AlertCircle } from '@lucide/svelte';
+  import { Play, Square, AlertCircle, Download } from '@lucide/svelte';
   import { formatCount, formatDuration, formatHashrate, store } from '../lib/store.svelte';
   import OnionDisplay from './OnionDisplay.svelte';
 
@@ -39,29 +39,64 @@
 
   <section class="panel">
     <form class="actions" onsubmit={handleSubmit}>
-      <label class="threads">
-        <span class="lab">Threads</span>
-        <input
-          class="slider"
-          type="range"
-          min={1}
-          max={maxThreads}
-          style:--pct="{pct}%"
-          disabled={snap.active}
-          bind:value={store.threadsInput}
-        />
-        <span class="mono val">{store.threadsInput}</span>
-      </label>
+      <div class="controls-left">
+        {#if store.hasGpu}
+          <div class="seg" role="group" aria-label="Engine mode">
+            {#each [
+              { id: 'auto', label: 'Auto' },
+              { id: 'gpu', label: 'GPU' },
+              { id: 'cpu', label: 'CPU' },
+              { id: 'hybrid', label: 'Hybrid' }
+            ] as opt (opt.id)}
+              <button
+                type="button"
+                class="seg-btn"
+                class:active={store.engineMode === opt.id}
+                disabled={snap.active}
+                onclick={() => store.setEngineMode(opt.id as 'auto' | 'gpu' | 'cpu' | 'hybrid')}
+              >
+                {opt.label}
+              </button>
+            {/each}
+          </div>
+        {/if}
 
-      {#if snap.active}
-        <button type="submit" class="go go-stop" disabled={store.busy}>
-          <Square size={14} /><span>Stop</span>
-        </button>
-      {:else}
-        <button type="submit" class="go go-start" disabled={store.busy || Boolean(store.targetError)}>
-          <Play size={14} /><span>Start</span>
-        </button>
-      {/if}
+        <label class="threads" class:dimmed={!store.usesCpu}>
+          <span class="lab">Threads</span>
+          <input
+            class="slider"
+            type="range"
+            min={1}
+            max={maxThreads}
+            style:--pct="{pct}%"
+            disabled={snap.active || !store.usesCpu}
+            bind:value={store.threadsInput}
+          />
+          <span class="mono val">{store.threadsInput}</span>
+        </label>
+      </div>
+
+      <div class="controls-right">
+        {#if snap.best_address || store.mints.length > 0}
+          <button
+            type="button"
+            class="go go-export"
+            title="Export latest mint as .tar"
+            onclick={() => store.exportMint()}
+          >
+            <Download size={14} /><span>Export</span>
+          </button>
+        {/if}
+        {#if snap.active}
+          <button type="submit" class="go go-stop" disabled={store.busy}>
+            <Square size={14} /><span>Stop</span>
+          </button>
+        {:else}
+          <button type="submit" class="go go-start" disabled={store.busy || Boolean(store.targetError)}>
+            <Play size={14} /><span>Start</span>
+          </button>
+        {/if}
+      </div>
     </form>
 
     <div class="divider"></div>
@@ -109,11 +144,46 @@
     margin: 16px -24px 18px;
   }
 
-  .actions { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
-  .threads { display: flex; align-items: center; gap: 14px; flex: 1; min-width: 0; }
+  .actions { display: flex; align-items: center; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+  .controls-left { display: flex; align-items: center; gap: 18px; flex: 1; min-width: 0; flex-wrap: wrap; }
+  .controls-right { display: flex; align-items: center; gap: 10px; }
+  .threads { display: flex; align-items: center; gap: 14px; flex: 1; min-width: 180px; transition: opacity 140ms; }
+  .threads.dimmed { opacity: 0.45; }
   .lab { font-size: 12px; color: var(--dim); }
   .val { font-size: 13px; color: var(--accent); min-width: 2ch; text-align: right; }
-
+  .seg {
+    display: inline-flex;
+    padding: 3px;
+    gap: 2px;
+    border-radius: var(--r-sm);
+    background: var(--bg);
+    border: 1px solid var(--border);
+  }
+  .seg-btn {
+    padding: 5px 10px;
+    font-size: 12px;
+    border-radius: 4px;
+    color: var(--dim);
+    transition: background 120ms, color 120ms;
+  }
+  .seg-btn:hover:not(:disabled) { color: var(--fg); }
+  .seg-btn.active {
+    background: var(--surface-2);
+    color: var(--accent);
+    font-weight: 500;
+  }
+  .seg-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+  .go-export {
+    min-width: auto;
+    padding: 0 14px;
+    background: var(--surface-1);
+    border-color: var(--border);
+    color: var(--fg);
+  }
+  .go-export:hover:not(:disabled) {
+    border-color: rgba(194, 168, 108, 0.45);
+    color: var(--head);
+  }
   .go {
     height: 36px;
     min-width: 108px;

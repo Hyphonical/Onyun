@@ -2,7 +2,7 @@
 
 use crate::cli::render::OutputFlags;
 use crate::core::engine::EngineKind;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
 
 #[derive(Debug)]
@@ -28,7 +28,9 @@ pub(crate) struct UiArgs {
     pub(crate) port: u16,
     pub(crate) bind: String,
     pub(crate) web: bool,
+    pub(crate) engine: EngineKind,
     pub(crate) out_dir: PathBuf,
+    pub(crate) flags: OutputFlags,
 }
 
 pub(crate) fn default_threads() -> usize {
@@ -61,7 +63,9 @@ where
         "-V" | "--version" | "version" => Ok(Command::Version),
         "mint" => parse_mint(iter, flags),
         "ui" => parse_ui(iter, flags),
-        other => bail!("unknown subcommand '{other}' (expected `mint` or `ui`; run `onyun --help`)"),
+        other => {
+            bail!("unknown subcommand '{other}' (expected `mint` or `ui`; run `onyun --help`)")
+        }
     }
 }
 
@@ -123,6 +127,7 @@ where
     let mut port: Option<u16> = None;
     let mut bind = String::from("127.0.0.1");
     let mut web = false;
+    let mut engine = EngineKind::Auto;
     let mut out_dir = PathBuf::from("./mints");
 
     while let Some(arg) = args.next() {
@@ -135,6 +140,10 @@ where
             }
             "-b" | "--bind" => {
                 bind = args.next().context("missing value for --bind")?;
+            }
+            "-e" | "--engine" => {
+                let val = args.next().context("missing value for --engine")?;
+                engine = EngineKind::parse(&val)?;
             }
             "-o" | "--out" => {
                 let val = args.next().context("missing value for --out")?;
@@ -150,6 +159,8 @@ where
         port: resolved_port,
         bind,
         web,
+        engine,
         out_dir,
+        flags,
     }))
 }

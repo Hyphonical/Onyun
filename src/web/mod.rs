@@ -9,15 +9,14 @@ mod routes;
 mod state;
 
 use crate::cli::args::UiArgs;
-use crate::cli::render::{self, OutputFlags};
+use crate::cli::render;
 use crate::cli::style::Color;
 use crate::web::auth::require_auth;
 use crate::web::state::AppState;
 use anyhow::{Context, Result};
 use axum::{
-    middleware,
+    Router, middleware,
     routing::{delete, get, post},
-    Router,
 };
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -29,7 +28,7 @@ pub(crate) fn run_ui(args: &UiArgs) -> Result<()> {
         .build()
         .context("failed to start async runtime")?;
 
-    let state = AppState::new(args.out_dir.clone());
+    let state = AppState::new(args.out_dir.clone(), args.engine, args.flags);
     let bind_addr: SocketAddr = format!("{}:{}", args.bind, args.port)
         .parse()
         .with_context(|| format!("invalid bind address '{}:{}'", args.bind, args.port))?;
@@ -48,17 +47,21 @@ pub(crate) fn run_ui(args: &UiArgs) -> Result<()> {
     let router = build_router(Arc::clone(&state));
     let use_desktop = should_launch_desktop(args);
 
-    let flags = OutputFlags::default();
+    let flags = args.flags;
     render::blank(flags);
-    render::rule(flags, &format!("Onyun {}", env!("CARGO_PKG_VERSION")));
+    render::rule(flags, &format!("Onyun UI (v{})", env!("CARGO_PKG_VERSION")));
     render::row(
         flags,
         "ui",
         "Mode",
-        if use_desktop { "Desktop (Tauri)" } else { "Web (Axum)" },
+        if use_desktop {
+            "Desktop (Tauri)"
+        } else {
+            "Web (Axum)"
+        },
         Color::Heading,
     );
-    let ui_engine = crate::core::engine::select_engine(crate::core::engine::EngineKind::Auto);
+    let ui_engine = crate::core::engine::select_engine(args.engine);
     render::row(
         flags,
         "ui",
@@ -131,6 +134,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/mint/stop", post(routes::post_mint_stop))
         .route("/api/mints", get(routes::get_mints))
         .route("/api/mints/{target}", delete(routes::delete_mint))
+        .route("/api/mints/{target}/export", get(routes::export_mint))
         .route_layer(middleware::from_fn_with_state(
             Arc::clone(&state),
             require_auth,

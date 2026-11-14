@@ -9,8 +9,8 @@ mod simd;
 use crate::core::onion::OnionKeypair;
 use anyhow::Result;
 use serde::Serialize;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
-use std::sync::{mpsc::Sender, Arc};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
+use std::sync::{Arc, mpsc::Sender};
 use std::thread::JoinHandle;
 use std::time::Instant;
 
@@ -19,6 +19,7 @@ use std::time::Instant;
 pub(crate) struct MintConfig {
     pub(crate) target: String,
     pub(crate) threads: usize,
+    pub(crate) telemetry_offset: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -108,6 +109,9 @@ impl EngineHandle {
 pub(crate) trait MintEngine: Send + Sync {
     fn label(&self) -> &'static str;
     fn device_name(&self) -> String;
+    fn slot_count(&self, _cpu_threads: usize) -> usize {
+        1
+    }
     fn start(
         &self,
         config: MintConfig,
@@ -117,6 +121,14 @@ pub(crate) trait MintEngine: Send + Sync {
     ) -> Result<EngineHandle>;
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[cfg_attr(not(feature = "web"), allow(dead_code))]
+pub(crate) struct ComputeDevice {
+    pub(crate) id: String,
+    pub(crate) kind: String,
+    pub(crate) name: String,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[cfg_attr(not(feature = "web"), allow(dead_code))]
 pub(crate) enum EngineKind {
@@ -124,6 +136,7 @@ pub(crate) enum EngineKind {
     Auto,
     Cpu,
     Gpu,
+    Hybrid,
 }
 
 impl EngineKind {
@@ -132,33 +145,194 @@ impl EngineKind {
             "auto" => Ok(Self::Auto),
             "cpu" => Ok(Self::Cpu),
             "gpu" => Ok(Self::Gpu),
-            other => anyhow::bail!("invalid engine '{other}' (expected `auto`, `cpu`, or `gpu`)"),
+            "hybrid" | "both" | "all" => Ok(Self::Hybrid),
+            other => anyhow::bail!(
+                "invalid engine '{other}' (expected `auto`, `cpu`, `gpu`, or `hybrid`)"
+            ),
+        }
+    }
+
+    #[cfg_attr(not(feature = "web"), allow(dead_code))]
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Cpu => "cpu",
+            Self::Gpu => "gpu",
+            Self::Hybrid => "hybrid",
         }
     }
 }
 
+#[cfg_attr(not(feature = "web"), allow(dead_code))]
+pub(crate) fn list_devices() -> Vec<ComputeDevice> {
+    #[allow(unused_mut)]
+    let mut devices = vec![ComputeDevice {
+        id: "cpu".to_string(),
+        kind: "cpu".to_string(),
+        name: cpu::CpuMkEngine.device_name(),
+    }];
+    #[cfg(feature = "gpu")]
+    {
+        let mut gpus: Vec<ComputeDevice> = gpu::enumerate_gpus()
+            .into_iter()
+            .map(|g| ComputeDevice {
+                id: format!("gpu:{}", g.adapter_index),
+                kind: "gpu".to_string(),
+                name: g.name,
+            })
+            .collect();
+        gpus.extend(devices);
+        devices = gpus;
+    }
+    devices
+}
+
+struct CompositeEngine {
+    label: &'static str,
+    engines: Vec<Box<dyn MintEngine>>,
+}
+
+impl MintEngine for CompositeEngine {
+    fn label(&self) -> &'static str {
+        self.label
+    }
+
+    fn device_name(&self) -> String {
+        let names: Vec<String> = self.engines.iter().map(|e| e.device_name()).collect();
+        names.join(" + ")
+    }
+
+    fn slot_count(&self, cpu_threads: usize) -> usize {
+        self.engines.iter().map(|e| e.slot_count(cpu_threads)).sum()
+    }
+
+    fn start(
+        &self,
+        config: MintConfig,
+        telemetry: Arc<SharedTelemetry>,
+        on_milestone: Sender<MintMilestone>,
+        cancel: Arc<AtomicBool>,
+    ) -> Result<EngineHandle> {
+        let mut all_workers = Vec::new();
+        let mut offset = config.telemetry_offset;
+        for engine in &self.engines {
+            let slots = engine.slot_count(config.threads);
+            let sub_config = MintConfig {
+                target: config.target.clone(),
+                threads: config.threads,
+                telemetry_offset: offset,
+            };
+            let handle = engine.start(
+                sub_config,
+                Arc::clone(&telemetry),
+                on_milestone.clone(),
+                Arc::clone(&cancel),
+            )?;
+            all_workers.extend(handle.workers);
+            offset += slots;
+        }
+        Ok(EngineHandle {
+            workers: all_workers,
+        })
+    }
+}
+
 pub(crate) fn select_engine(kind: EngineKind) -> anyhow::Result<Box<dyn MintEngine>> {
+    select_engine_with_devices(kind, None)
+}
+
+#[cfg_attr(not(feature = "web"), allow(dead_code))]
+pub(crate) fn select_engine_with_devices(
+    kind: EngineKind,
+    selected_ids: Option<&[String]>,
+) -> anyhow::Result<Box<dyn MintEngine>> {
+    let want_id = |id: &str| -> bool {
+        match selected_ids {
+            None => true,
+            Some(ids) => ids.iter().any(|x| x == id),
+        }
+    };
+
+    #[cfg(feature = "gpu")]
+    let mut gpus: Vec<gpu::GpuMkEngine> = gpu::enumerate_gpus()
+        .into_iter()
+        .filter(|g| want_id(&format!("gpu:{}", g.adapter_index)))
+        .collect();
+    #[cfg(not(feature = "gpu"))]
+    let gpus: Vec<Box<dyn MintEngine>> = Vec::new();
+
     match kind {
         EngineKind::Cpu => Ok(Box::new(cpu::CpuMkEngine)),
         EngineKind::Gpu => {
             #[cfg(feature = "gpu")]
             {
-                if gpu::is_available() {
-                    Ok(Box::new(gpu::GpuMkEngine))
-                } else {
-                    anyhow::bail!("GPU engine requested, but no compatible GPU adapter was found")
+                if gpus.is_empty() {
+                    anyhow::bail!("GPU engine requested, but no compatible GPU adapter was found");
                 }
+                if gpus.len() == 1 {
+                    return Ok(Box::new(gpus.remove(0)));
+                }
+                let engines: Vec<Box<dyn MintEngine>> = gpus
+                    .into_iter()
+                    .map(|g| Box::new(g) as Box<dyn MintEngine>)
+                    .collect();
+                Ok(Box::new(CompositeEngine {
+                    label: "GPU",
+                    engines,
+                }))
             }
             #[cfg(not(feature = "gpu"))]
             {
-                anyhow::bail!("GPU engine requested, but this binary was built without `--features gpu`")
+                let _ = gpus;
+                anyhow::bail!(
+                    "GPU engine requested, but this binary was built without `--features gpu`"
+                )
             }
+        }
+        EngineKind::Hybrid => {
+            let mut engines: Vec<Box<dyn MintEngine>> = Vec::new();
+            #[allow(unused_mut)]
+            let mut has_gpu = false;
+            #[cfg(feature = "gpu")]
+            {
+                for g in gpus {
+                    has_gpu = true;
+                    engines.push(Box::new(g));
+                }
+            }
+            let has_cpu = want_id("cpu");
+            if has_cpu {
+                engines.push(Box::new(cpu::CpuMkEngine));
+            }
+            if engines.is_empty() {
+                anyhow::bail!("at least one compute device must be enabled");
+            }
+            if engines.len() == 1 {
+                return Ok(engines.remove(0));
+            }
+            let label = match (has_gpu, has_cpu) {
+                (true, true) => "GPU + CPU",
+                (true, false) => "GPU",
+                (false, true) => "CPU",
+                (false, false) => unreachable!(),
+            };
+            Ok(Box::new(CompositeEngine { label, engines }))
         }
         EngineKind::Auto => {
             #[cfg(feature = "gpu")]
             {
-                if gpu::is_available() {
-                    return Ok(Box::new(gpu::GpuMkEngine));
+                if !gpus.is_empty() {
+                    if gpus.len() == 1 {
+                        return Ok(Box::new(gpus.remove(0)));
+                    }
+                    let engines: Vec<Box<dyn MintEngine>> = gpus
+                        .into_iter()
+                        .map(|g| Box::new(g) as Box<dyn MintEngine>)
+                        .collect();
+                    return Ok(Box::new(CompositeEngine {
+                        label: "GPU",
+                        engines,
+                    }));
                 }
             }
             Ok(Box::new(cpu::CpuMkEngine))

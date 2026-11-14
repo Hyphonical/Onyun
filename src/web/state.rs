@@ -1,19 +1,21 @@
 //! Shared state and background mint coordinator for the Axum / Tauri UI.
 
+use crate::cli::render::{self, OutputFlags};
+use crate::cli::style::Color;
 use crate::core::base32::normalize_target;
 use crate::core::engine::{
-    compute_progress, select_engine, EngineHandle, EngineKind, MintConfig, MintMilestone,
-    MintSnapshot, SharedTelemetry,
+    ComputeDevice, EngineHandle, EngineKind, MintConfig, MintMilestone, MintSnapshot,
+    SharedTelemetry, compute_progress, list_devices, select_engine_with_devices,
 };
 use crate::core::storage::{load_existing_best, save_keypair_atomic, target_dir};
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use hmac::{Hmac, KeyInit, Mac};
 use rand::Rng;
 use serde::Serialize;
 use sha2::Sha256;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use subtle::ConstantTimeEq;
@@ -36,7 +38,9 @@ pub(crate) struct SavedMintEntry {
 pub(crate) struct StatusPayload {
     pub(crate) version: &'static str,
     pub(crate) engine: &'static str,
+    pub(crate) engine_kind: &'static str,
     pub(crate) device_name: String,
+    pub(crate) devices: Vec<ComputeDevice>,
     pub(crate) cpu_threads: usize,
     pub(crate) out_dir: String,
     pub(crate) auth_required: bool,
@@ -126,6 +130,9 @@ struct ActiveJob {
 pub(crate) struct AppState {
     pub(crate) out_dir: PathBuf,
     pub(crate) auth: Option<AuthConfig>,
+    pub(crate) default_engine: EngineKind,
+    pub(crate) devices: Vec<ComputeDevice>,
+    pub(crate) flags: OutputFlags,
     pub(crate) cpu_threads: usize,
     snapshot: Mutex<MintSnapshot>,
     active_job: Mutex<Option<ActiveJob>>,
@@ -133,14 +140,22 @@ pub(crate) struct AppState {
 }
 
 impl AppState {
-    pub(crate) fn new(out_dir: PathBuf) -> Arc<Self> {
+    pub(crate) fn new(
+        out_dir: PathBuf,
+        default_engine: EngineKind,
+        flags: OutputFlags,
+    ) -> Arc<Self> {
         let cpu_threads = std::thread::available_parallelism()
             .map(std::num::NonZero::get)
             .unwrap_or(4);
+        let devices = list_devices();
         let (events_tx, _) = broadcast::channel(64);
         Arc::new(Self {
             out_dir,
             auth: AuthConfig::from_env(),
+            default_engine,
+            devices,
+            flags,
             cpu_threads,
             snapshot: Mutex::new(MintSnapshot {
                 active: false,
@@ -199,19 +214,58 @@ impl AppState {
         self: &Arc<Self>,
         raw_target: &str,
         requested_threads: Option<usize>,
+        requested_engine: Option<&str>,
+        requested_devices: Option<&[String]>,
     ) -> Result<MintSnapshot> {
         let target = normalize_target(raw_target)?;
         let threads = requested_threads
             .unwrap_or(self.cpu_threads)
             .clamp(1, self.cpu_threads.max(1) * 2);
+        let engine_kind = match requested_engine {
+            Some(raw) => EngineKind::parse(raw)?,
+            None => self.default_engine,
+        };
 
         self.stop_mint();
 
         let existing = load_existing_best(&self.out_dir, &target);
         let initial_best_len = existing.as_ref().map_or(0, |(_, len)| *len);
         let mut best_address = existing.as_ref().map(|(addr, _)| addr.clone());
+        let out_path = target_dir(&self.out_dir, &target);
+        let flags = self.flags;
+
+        let engine = select_engine_with_devices(engine_kind, requested_devices)?;
+
+        render::blank(flags);
+        render::row(flags, "ui", "Target", &target, Color::Heading);
+        render::row(flags, "ui", "Engine", engine.label(), Color::Text);
+        render::row(flags, "ui", "Device", &engine.device_name(), Color::Text);
+        render::row(
+            flags,
+            "ui",
+            "Output",
+            &out_path.display().to_string(),
+            Color::Dim,
+        );
+        if let Some(addr) = &best_address {
+            render::row(
+                flags,
+                "ui",
+                "Existing",
+                &format!("{addr} ({initial_best_len}/{})", target.len()),
+                Color::Dim,
+            );
+        }
 
         if initial_best_len >= target.len() {
+            render::row(
+                flags,
+                "ui",
+                "Saved",
+                &out_path.display().to_string(),
+                Color::Accent,
+            );
+            render::blank(flags);
             let snap = MintSnapshot {
                 active: false,
                 completed: true,
@@ -232,14 +286,15 @@ impl AppState {
         }
 
         let cancel = Arc::new(AtomicBool::new(false));
-        let telemetry = Arc::new(SharedTelemetry::new(threads, initial_best_len));
+        let slots = engine.slot_count(threads);
+        let telemetry = Arc::new(SharedTelemetry::new(slots, initial_best_len));
         let (tx, rx) = mpsc::channel::<MintMilestone>();
 
-        let engine = select_engine(EngineKind::Auto)?;
         let handle: EngineHandle = engine.start(
             MintConfig {
                 target: target.clone(),
                 threads,
+                telemetry_offset: 0,
             },
             Arc::clone(&telemetry),
             tx,
@@ -272,15 +327,36 @@ impl AppState {
             let mut best_len = initial_best_len;
             let mut last_hashes: u64 = 0;
             let mut last_tick = Instant::now();
+            let mut last_mint_at = telemetry.started_at;
             let mut ewma_rate: f64 = 0.0;
 
             while !cancel_worker.load(Ordering::Relaxed) && best_len < target_owned.len() {
                 while let Ok(milestone) = rx.try_recv() {
                     if milestone.matched_len > best_len {
+                        let now = Instant::now();
+                        let delta = now.duration_since(last_mint_at);
+                        last_mint_at = now;
+
                         best_len = milestone.matched_len;
                         telemetry.record_new_best(best_len);
                         best_address = Some(milestone.keypair.address.clone());
-                        let _ = save_keypair_atomic(&out_dir, &target_owned, &milestone.keypair);
+                        if let Err(err) =
+                            save_keypair_atomic(&out_dir, &target_owned, &milestone.keypair)
+                        {
+                            render::failure(flags, "ui", &format!("autosave failed: {err}"));
+                        } else {
+                            let msg = format!(
+                                "{} ({})",
+                                milestone.keypair.address,
+                                render::format_delta(delta)
+                            );
+                            render::done(
+                                flags,
+                                "ui",
+                                &format!("{best_len}/{}", target_owned.len()),
+                                &msg,
+                            );
+                        }
                         if best_len >= target_owned.len() {
                             cancel_worker.store(true, Ordering::SeqCst);
                             break;
@@ -339,14 +415,61 @@ impl AppState {
             // Drain any final milestone delivered just as workers exited.
             while let Ok(milestone) = rx.try_recv() {
                 if milestone.matched_len > best_len {
+                    let now = Instant::now();
+                    let delta = now.duration_since(last_mint_at);
+                    last_mint_at = now;
+
                     best_len = milestone.matched_len;
                     telemetry.record_new_best(best_len);
                     best_address = Some(milestone.keypair.address.clone());
-                    let _ = save_keypair_atomic(&out_dir, &target_owned, &milestone.keypair);
+                    if let Err(err) =
+                        save_keypair_atomic(&out_dir, &target_owned, &milestone.keypair)
+                    {
+                        render::failure(flags, "ui", &format!("autosave failed: {err}"));
+                    } else {
+                        let msg = format!(
+                            "{} ({})",
+                            milestone.keypair.address,
+                            render::format_delta(delta)
+                        );
+                        render::done(
+                            flags,
+                            "ui",
+                            &format!("{best_len}/{}", target_owned.len()),
+                            &msg,
+                        );
+                    }
                 }
             }
 
+            let elapsed = telemetry.started_at.elapsed();
             let total_hashes = telemetry.total_hashes();
+            let avg_rate = (total_hashes as f64) / elapsed.as_secs_f64().max(0.001);
+            render::row(
+                flags,
+                "ui",
+                "Elapsed",
+                &render::format_duration(elapsed),
+                Color::Dim,
+            );
+            render::row(
+                flags,
+                "ui",
+                "Speed",
+                &render::format_rate(avg_rate),
+                Color::Dim,
+            );
+            if best_address.is_some() {
+                render::row(
+                    flags,
+                    "ui",
+                    "Saved",
+                    &out_path.display().to_string(),
+                    Color::Accent,
+                );
+            }
+            render::blank(flags);
+
             let hashes_at_best = telemetry.hashes_at_last_best.load(Ordering::Relaxed);
             let hashes_since_best = total_hashes.saturating_sub(hashes_at_best);
             let completed = best_len >= target_owned.len();
@@ -363,7 +486,7 @@ impl AppState {
                 total_hashes,
                 hashes_since_best,
                 hashes_per_sec: 0.0,
-                elapsed_secs: telemetry.started_at.elapsed().as_secs_f64(),
+                elapsed_secs: elapsed.as_secs_f64(),
                 progress: if completed { 1.0 } else { progress },
                 pace_ratio,
                 eta_secs: if completed { Some(0.0) } else { eta_secs },

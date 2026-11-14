@@ -3,11 +3,9 @@
 //! stepping, and workgroup-cooperative Montgomery batch Z-inversion.
 
 use crate::core::base32::PrefixMatcher;
-use crate::core::engine::helper::{derive_expanded_secret, CachedStep, ExtPoint, Fe};
-use crate::core::engine::{
-    EngineHandle, MintConfig, MintEngine, MintMilestone, SharedTelemetry,
-};
-use crate::core::onion::{derive_address, OnionKeypair};
+use crate::core::engine::helper::{CachedStep, ExtPoint, Fe, derive_expanded_secret};
+use crate::core::engine::{EngineHandle, MintConfig, MintEngine, MintMilestone, SharedTelemetry};
+use crate::core::onion::{OnionKeypair, derive_address};
 use anyhow::{Context, Result};
 use bytemuck::{Pod, Zeroable};
 use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
@@ -15,7 +13,7 @@ use curve25519_dalek::scalar::Scalar;
 use rand::Rng;
 use sha2::{Digest, Sha512};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc::Sender, Arc};
+use std::sync::{Arc, mpsc::Sender};
 use std::thread;
 use std::time::Instant;
 
@@ -33,18 +31,39 @@ const MAX_HITS_PER_DISPATCH: usize = 64;
 
 const SHADER_SRC: &str = include_str!("ed25519_mint.wgsl");
 
-pub(crate) struct GpuMkEngine;
+pub(crate) struct GpuMkEngine {
+    pub(crate) adapter_index: usize,
+    pub(crate) name: String,
+}
 
-/// Probes whether a hardware/software `wgpu` compute adapter is available.
-pub(crate) fn is_available() -> bool {
+fn hardware_adapters() -> Vec<wgpu::Adapter> {
     let instance = wgpu::Instance::default();
-    pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::HighPerformance,
-        compatible_surface: None,
-        force_fallback_adapter: false,
-        ..Default::default()
-    }))
-    .is_ok()
+    let all = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()));
+    let mut selected: Vec<wgpu::Adapter> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for adapter in all {
+        let info = adapter.get_info();
+        if info.device_type == wgpu::DeviceType::Cpu {
+            continue;
+        }
+        let key = (info.vendor, info.device, info.name.clone());
+        if seen.insert(key) {
+            selected.push(adapter);
+        }
+    }
+    selected
+}
+
+pub(crate) fn enumerate_gpus() -> Vec<GpuMkEngine> {
+    hardware_adapters()
+        .into_iter()
+        .enumerate()
+        .map(|(adapter_index, adapter)| GpuMkEngine {
+            adapter_index,
+            name: adapter.get_info().name,
+        })
+        .collect()
 }
 
 #[repr(C)]
@@ -219,14 +238,7 @@ impl MintEngine for GpuMkEngine {
     }
 
     fn device_name(&self) -> String {
-        let instance = wgpu::Instance::default();
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            compatible_surface: None,
-            force_fallback_adapter: false,
-            ..Default::default()
-        }))
-        .map_or_else(|_| "Unknown GPU".to_string(), |a| a.get_info().name)
+        self.name.clone()
     }
 
     fn start(
@@ -236,14 +248,15 @@ impl MintEngine for GpuMkEngine {
         on_milestone: Sender<MintMilestone>,
         cancel: Arc<AtomicBool>,
     ) -> Result<EngineHandle> {
-        let instance = wgpu::Instance::default();
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            compatible_surface: None,
-            force_fallback_adapter: false,
-            ..Default::default()
-        }))
-        .context("no compatible GPU adapter found")?;
+        let adapter = hardware_adapters()
+            .into_iter()
+            .nth(self.adapter_index)
+            .with_context(|| {
+                format!(
+                    "GPU adapter #{} ({}) is no longer available",
+                    self.adapter_index, self.name
+                )
+            })?;
 
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("onyun-gpu-device"),
@@ -405,8 +418,9 @@ impl MintEngine for GpuMkEngine {
             ],
         });
 
+        let telemetry_slot = config.telemetry_offset;
         let handle = thread::Builder::new()
-            .name("onyun-gpu-coord".to_string())
+            .name(format!("onyun-gpu-{}", self.adapter_index))
             .spawn(move || {
                 coordinator_loop(
                     &device,
@@ -422,11 +436,11 @@ impl MintEngine for GpuMkEngine {
                     base_scalars,
                     gpu_points,
                     &telemetry,
+                    telemetry_slot,
                     &on_milestone,
                     &cancel,
                 );
             })?;
-
         Ok(EngineHandle {
             workers: vec![handle],
         })
@@ -448,6 +462,7 @@ fn coordinator_loop(
     mut base_scalars: Vec<Scalar>,
     mut gpu_points: Vec<ExtPointGpu>,
     telemetry: &Arc<SharedTelemetry>,
+    telemetry_slot: usize,
     on_milestone: &Sender<MintMilestone>,
     cancel: &Arc<AtomicBool>,
 ) {
@@ -599,7 +614,7 @@ fn coordinator_loop(
 
         let keys_this_dispatch = (cur.steps as u64) * BATCH_SIZE;
         let hashes = (NUM_THREADS as u64) * keys_this_dispatch;
-        telemetry.thread_hashes[0]
+        telemetry.thread_hashes[telemetry_slot]
             .0
             .fetch_add(hashes, Ordering::Relaxed);
 

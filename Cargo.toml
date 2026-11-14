@@ -1,6 +1,6 @@
 [package]
 name = "onyun"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "High-speed Tor v3 .onion vanity address minter with CLI, Web UI, and Tauri desktop support"
 license = "AGPL-3.0-only"
