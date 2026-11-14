@@ -9,7 +9,7 @@ use crate::core::engine::{
 use crate::core::storage::{load_existing_best, save_keypair_atomic, target_dir};
 use anyhow::{bail, Result};
 use hmac::{Hmac, KeyInit, Mac};
-use rand::RngCore;
+use rand::Rng;
 use serde::Serialize;
 use sha2::Sha256;
 use std::path::PathBuf;
