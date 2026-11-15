@@ -6,12 +6,13 @@ pub(super) mod avx2 {
     use crate::core::base32::PrefixMatcher;
     use crate::core::engine::MintMilestone;
     use crate::core::engine::SharedTelemetry;
-    use crate::core::engine::helper::{Fe, MontPoint, MontStep, derive_expanded_secret};
-    use crate::core::onion::{OnionKeypair, derive_address};
+    use crate::core::engine::helper::{
+        CandidateHit, Fe, MontPoint, MontStep, refresh_fast_mask, report_candidate_hit,
+        seed_to_scalar,
+    };
     use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
     use curve25519_dalek::scalar::Scalar;
     use rand::Rng;
-    use sha2::{Digest, Sha512};
     use std::arch::x86_64::*;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc::Sender;
@@ -19,12 +20,12 @@ pub(super) mod avx2 {
     const MASK26: u64 = 0x03ff_ffff;
     const MASK25: u64 = 0x01ff_ffff;
 
-    const BATCH_PER_STREAM: usize = 64;
+    const BATCH_PER_STREAM: usize = 256;
     const TELEMETRY_FLUSH_BATCHES: usize = 64; // 64 * 256 = 16,384 keys per atomic add
     const RESEED_STEPS: u64 = 1 << 24;
 
     #[derive(Clone, Copy)]
-    struct Fe4([__m256i; 10]);
+    pub(super) struct Fe4([__m256i; 10]);
 
     impl Fe4 {
         #[inline]
@@ -54,7 +55,7 @@ pub(super) mod avx2 {
 
         #[inline]
         #[target_feature(enable = "avx2")]
-        unsafe fn from_4_fe(f: [&Fe; 4]) -> Self {
+        pub(super) unsafe fn from_4_fe(f: [&Fe; 4]) -> Self {
             let l0 = fe5_to_10(f[0]);
             let l1 = fe5_to_10(f[1]);
             let l2 = fe5_to_10(f[2]);
@@ -159,7 +160,7 @@ pub(super) mod avx2 {
 
         #[inline]
         #[target_feature(enable = "avx2")]
-        unsafe fn mul(a: &Self, b: &Self) -> Self {
+        pub(super) unsafe fn mul(a: &Self, b: &Self) -> Self {
             let k19 = _mm256_set1_epi64x(19);
             let m26 = _mm256_set1_epi64x(MASK26 as i64);
             let m25 = _mm256_set1_epi64x(MASK25 as i64);
@@ -542,9 +543,10 @@ pub(super) mod avx2 {
         }
 
         /// Computes the canonical first 8 bytes (big-endian u64) for all 4 lanes.
+        #[cfg(test)]
         #[inline]
         #[target_feature(enable = "avx2")]
-        unsafe fn first_u64_be_4(&self) -> [u64; 4] {
+        pub(super) unsafe fn first_u64_be_4(&self) -> [u64; 4] {
             unsafe {
                 let m26 = _mm256_set1_epi64x(MASK26 as i64);
                 let m25 = _mm256_set1_epi64x(MASK25 as i64);
@@ -624,6 +626,19 @@ pub(super) mod avx2 {
                 ]
             }
         }
+
+        /// Fast uncanonicalized first 8 bytes (little-endian u64 per lane), valid on direct `Fe4::mul` outputs.
+        #[inline]
+        #[target_feature(enable = "avx2")]
+        pub(super) unsafe fn first_u64_le_weak_4(&self) -> __m256i {
+            _mm256_or_si256(
+                self.0[0],
+                _mm256_or_si256(
+                    _mm256_slli_epi64::<26>(self.0[1]),
+                    _mm256_slli_epi64::<51>(self.0[2]),
+                ),
+            )
+        }
     }
 
     #[inline]
@@ -690,7 +705,7 @@ pub(super) mod avx2 {
     ) {
         unsafe {
             let mut rng = rand::rng();
-            let mut local_best = telemetry.global_best_len.load(Ordering::Relaxed) as usize;
+            let local_best = telemetry.global_best_len.load(Ordering::Relaxed) as usize;
             let target_len = matcher.len();
 
             let step_u_plus_w = Fe4::splat(&step_mont.u_plus_w);
@@ -704,8 +719,10 @@ pub(super) mod avx2 {
             let mut local_hashes: u64 = 0;
             let mut batch_count: usize = 0;
 
-            let mut needed_chars = (local_best + 1).min(target_len);
-            let (mut mask64, mut expected64) = matcher.fast_mask_u64(needed_chars);
+            let (mut local_best, mask64, expected64) =
+                refresh_fast_mask(matcher, local_best, target_len);
+            let mut mask_le = mask64.swap_bytes();
+            let mut expected_le = expected64.swap_bytes();
 
             let mut seeds = [[0u8; 32]; 4];
             let mut base_scalars = [Scalar::ZERO; 4];
@@ -724,14 +741,7 @@ pub(super) mod avx2 {
 
                 for s in 0..4 {
                     rng.fill_bytes(&mut seeds[s]);
-                    let hash = Sha512::digest(seeds[s]);
-                    let mut base_scalar_bytes = [0u8; 32];
-                    base_scalar_bytes.copy_from_slice(&hash[..32]);
-                    base_scalar_bytes[0] &= 248;
-                    base_scalar_bytes[31] &= 127;
-                    base_scalar_bytes[31] |= 64;
-
-                    base_scalars[s] = Scalar::from_bytes_mod_order(base_scalar_bytes);
+                    base_scalars[s] = seed_to_scalar(&seeds[s]);
                     let p0 = ED25519_BASEPOINT_POINT * base_scalars[s];
                     let p_prev = ED25519_BASEPOINT_POINT * (base_scalars[s] - step8);
                     cur_pts[s] = MontPoint::from_dalek(&p0);
@@ -790,13 +800,21 @@ pub(super) mod avx2 {
                         };
 
                         let y_affine = Fe4::mul(&numer[k], &d_inv);
-                        let top4 = y_affine.first_u64_be_4();
+                        let m = _mm256_set1_epi64x(mask_le as i64);
+                        let e = _mm256_set1_epi64x(expected_le as i64);
+                        let eq = _mm256_cmpeq_epi64(
+                            _mm256_and_si256(y_affine.first_u64_le_weak_4(), m),
+                            e,
+                        );
+                        let hit_mask = _mm256_movemask_pd(_mm256_castsi256_pd(eq));
+                        if hit_mask == 0 {
+                            continue;
+                        }
 
-                        for (s, &top) in top4.iter().enumerate() {
-                            if (top & mask64) != expected64 {
+                        for s in 0..4 {
+                            if (hit_mask & (1 << s)) == 0 {
                                 continue;
                             }
-
                             let exact_step = batch_start_step + (k as u64);
                             let scalar = base_scalars[s] + Scalar::from(exact_step.wrapping_mul(8));
                             let full_pt = ED25519_BASEPOINT_POINT * scalar;
@@ -804,36 +822,24 @@ pub(super) mod avx2 {
 
                             let matched = matcher.matched_len(&pubkey);
                             if matched > local_best || (target_len == 52 && matched == 51) {
-                                let global_best =
-                                    telemetry.global_best_len.load(Ordering::Acquire) as usize;
-                                if matched > global_best || (target_len == 52 && matched == 51) {
-                                    let address = derive_address(&pubkey);
-                                    let full_matched = matcher.matched_len_hostname(&address);
-                                    if full_matched > global_best {
-                                        local_best = full_matched;
-                                        needed_chars = (local_best + 1).min(target_len);
-                                        (mask64, expected64) = matcher.fast_mask_u64(needed_chars);
-
-                                        let expanded_secret =
-                                            derive_expanded_secret(&seeds[s], exact_step, &scalar);
-                                        let kp = OnionKeypair {
-                                            address,
-                                            public_key: pubkey,
-                                            expanded_secret,
-                                        };
-                                        let _ = on_milestone.send(MintMilestone {
-                                            matched_len: full_matched,
-                                            keypair: kp,
-                                        });
-                                    } else if global_best > local_best {
-                                        local_best = global_best;
-                                        needed_chars = (local_best + 1).min(target_len);
-                                        (mask64, expected64) = matcher.fast_mask_u64(needed_chars);
-                                    }
-                                } else {
-                                    local_best = global_best;
-                                    needed_chars = (local_best + 1).min(target_len);
-                                    (mask64, expected64) = matcher.fast_mask_u64(needed_chars);
+                                let hit = CandidateHit {
+                                    seed: &seeds[s],
+                                    exact_step,
+                                    scalar: &scalar,
+                                    pubkey,
+                                    matched,
+                                };
+                                if let Some((nb, m, e)) = report_candidate_hit(
+                                    matcher,
+                                    telemetry,
+                                    on_milestone,
+                                    &hit,
+                                    local_best,
+                                    target_len,
+                                ) {
+                                    local_best = nb;
+                                    mask_le = m.swap_bytes();
+                                    expected_le = e.swap_bytes();
                                 }
                             }
                         }
@@ -851,9 +857,10 @@ pub(super) mod avx2 {
                         let global_best =
                             telemetry.global_best_len.load(Ordering::Relaxed) as usize;
                         if global_best > local_best {
-                            local_best = global_best;
-                            needed_chars = (local_best + 1).min(target_len);
-                            (mask64, expected64) = matcher.fast_mask_u64(needed_chars);
+                            let (nb, m, e) = refresh_fast_mask(matcher, global_best, target_len);
+                            local_best = nb;
+                            mask_le = m.swap_bytes();
+                            expected_le = e.swap_bytes();
                         }
                     }
                 }
@@ -863,6 +870,60 @@ pub(super) mod avx2 {
                 telemetry.thread_hashes[thread_idx]
                     .0
                     .fetch_add(local_hashes, Ordering::Relaxed);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::engine::helper::Fe;
+    use rand::Rng;
+
+    #[test]
+    fn weak_filter_matches_canonical_scalar_and_avx2() {
+        let mut rng = rand::rng();
+        let mut buf = [0u8; 32];
+        for _ in 0..1_000 {
+            rng.fill_bytes(&mut buf);
+            buf[31] &= 0x7f;
+            let a = Fe::from_bytes(&buf);
+            rng.fill_bytes(&mut buf);
+            buf[31] &= 0x7f;
+            let b = Fe::from_bytes(&buf);
+            let prod = Fe::mul(&a, &b);
+            assert_eq!(prod.first_u64_be_weak(), prod.first_u64_be());
+        }
+
+        #[cfg(target_arch = "x86_64")]
+        if std::arch::is_x86_feature_detected!("avx2") {
+            unsafe {
+                for _ in 0..500 {
+                    let mut a_arr = [Fe::ZERO; 4];
+                    let mut b_arr = [Fe::ZERO; 4];
+                    for i in 0..4 {
+                        rng.fill_bytes(&mut buf);
+                        buf[31] &= 0x7f;
+                        a_arr[i] = Fe::from_bytes(&buf);
+                        rng.fill_bytes(&mut buf);
+                        buf[31] &= 0x7f;
+                        b_arr[i] = Fe::from_bytes(&buf);
+                    }
+                    let a4 = avx2::Fe4::from_4_fe([&a_arr[0], &a_arr[1], &a_arr[2], &a_arr[3]]);
+                    let b4 = avx2::Fe4::from_4_fe([&b_arr[0], &b_arr[1], &b_arr[2], &b_arr[3]]);
+                    let prod4 = avx2::Fe4::mul(&a4, &b4);
+                    let canonical = prod4.first_u64_be_4();
+                    let weak_vec = prod4.first_u64_le_weak_4();
+                    let mut weak = [0u64; 4];
+                    std::arch::x86_64::_mm256_storeu_si256(
+                        weak.as_mut_ptr().cast::<std::arch::x86_64::__m256i>(),
+                        weak_vec,
+                    );
+                    for i in 0..4 {
+                        assert_eq!(weak[i].swap_bytes(), canonical[i]);
+                    }
+                }
             }
         }
     }

@@ -1,14 +1,14 @@
 //! Styled help and version presentation for `onyun`.
 
 use super::{
-    render::{clean, column},
+    render::{clean, column, is_tty_interactive, rule_segments},
     style::{self, Color},
 };
 use crate::cli::render::OutputFlags;
 use std::io::IsTerminal;
 
 fn stdout_interactive() -> bool {
-    std::io::stdout().is_terminal() && std::env::var_os("TERM").is_none_or(|t| t != "dumb")
+    is_tty_interactive(std::io::stdout().is_terminal())
 }
 
 fn stdout_colored(flags: OutputFlags) -> bool {
@@ -19,8 +19,7 @@ fn help_rule(flags: OutputFlags, label: &str) {
     if !stdout_interactive() {
         return;
     }
-    let label = clean(label);
-    let rest = "━".repeat(80usize.saturating_sub(label.chars().count() + 8));
+    let (label, rest) = rule_segments(label);
     let c = stdout_colored(flags);
     println!(
         "  {}  {}  {}",

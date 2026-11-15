@@ -1,7 +1,7 @@
-//! Handwritten zero-dependency CLI argument parser for `onyun`.
+//! CLI argument parser for `onyun`.
 
 use crate::cli::render::OutputFlags;
-use crate::core::engine::EngineKind;
+use crate::core::engine::{EngineKind, default_threads};
 use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
 
@@ -33,12 +33,6 @@ pub(crate) struct UiArgs {
     pub(crate) flags: OutputFlags,
 }
 
-pub(crate) fn default_threads() -> usize {
-    std::thread::available_parallelism()
-        .map(std::num::NonZeroUsize::get)
-        .unwrap_or(4)
-}
-
 pub(crate) fn parse_args<I>(args: I) -> Result<Command>
 where
     I: Iterator<Item = String>,
@@ -63,9 +57,7 @@ where
         "-V" | "--version" | "version" => Ok(Command::Version),
         "mint" => parse_mint(iter, flags),
         "ui" => parse_ui(iter, flags),
-        other => {
-            bail!("unknown subcommand '{other}' (expected `mint` or `ui`; run `onyun --help`)")
-        }
+        other => bail!("unknown subcommand '{other}' (expected `mint` or `ui`; run `onyun --help`)"),
     }
 }
 

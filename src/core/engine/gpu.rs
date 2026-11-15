@@ -1,17 +1,20 @@
-//! `GpuMkEngine`: cross-platform GPU minting engine using `wgpu` (WGSL) with
-//! 10-limb radix-2^25.5 GF(2^255 - 19) arithmetic, extended Edwards `+ 8*B`
-//! stepping, and workgroup-cooperative Montgomery batch Z-inversion.
+//! `GpuMkEngine`: discrete-GPU `wgpu` minting engine using 10-limb radix-2^25.5
+//! `GF(2^255 - 19)` arithmetic, extended Edwards `+ 8*B` stepping, and
+//! workgroup-cooperative Montgomery batch Z-inversion.
 
 use crate::core::base32::PrefixMatcher;
-use crate::core::engine::helper::{CachedStep, ExtPoint, Fe, derive_expanded_secret};
-use crate::core::engine::{EngineHandle, MintConfig, MintEngine, MintMilestone, SharedTelemetry};
+use crate::core::engine::helper::{
+    CachedStep, ExtPoint, Fe, derive_expanded_secret, seed_to_scalar,
+};
+use crate::core::engine::{
+    EngineHandle, MintConfig, MintEngine, MintMilestone, SharedTelemetry, default_threads,
+};
 use crate::core::onion::{OnionKeypair, derive_address};
 use anyhow::{Context, Result};
 use bytemuck::{Pod, Zeroable};
 use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
 use curve25519_dalek::scalar::Scalar;
 use rand::Rng;
-use sha2::{Digest, Sha512};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc::Sender};
 use std::thread;
@@ -22,14 +25,15 @@ pub(crate) const LABEL: &str = "GPU";
 const WG_SIZE: u32 = 128;
 const NUM_WORKGROUPS: u32 = 512;
 const NUM_THREADS: usize = (WG_SIZE * NUM_WORKGROUPS) as usize; // 65,536 threads
-const BATCH_SIZE: u64 = 8;
+const BATCH_SIZE: u64 = 16;
 const INITIAL_STEPS_PER_DISPATCH: u32 = 4;
 const MIN_STEPS_PER_DISPATCH: u32 = 1;
-const MAX_STEPS_PER_DISPATCH: u32 = 32;
+const MAX_STEPS_PER_DISPATCH: u32 = 16;
 const RESEED_STEPS: u64 = 1 << 24;
 const MAX_HITS_PER_DISPATCH: usize = 64;
 
 const SHADER_SRC: &str = include_str!("ed25519_mint.wgsl");
+const SHADER_SRC_U64: &str = include_str!(concat!(env!("OUT_DIR"), "/ed25519_mint_u64.wgsl"));
 
 pub(crate) struct GpuMkEngine {
     pub(crate) adapter_index: usize,
@@ -44,11 +48,10 @@ fn hardware_adapters() -> Vec<wgpu::Adapter> {
 
     for adapter in all {
         let info = adapter.get_info();
-        if info.device_type == wgpu::DeviceType::Cpu {
+        if info.device_type != wgpu::DeviceType::DiscreteGpu {
             continue;
         }
-        let key = (info.vendor, info.device, info.name.clone());
-        if seen.insert(key) {
+        if seen.insert((info.vendor, info.device)) {
             selected.push(adapter);
         }
     }
@@ -170,10 +173,7 @@ fn generate_seed_points(
     base_scalars: &mut [Scalar],
     gpu_points: &mut [ExtPointGpu],
 ) {
-    let workers = std::thread::available_parallelism()
-        .map(std::num::NonZeroUsize::get)
-        .unwrap_or(4)
-        .min(seeds.len().max(1));
+    let workers = default_threads().min(seeds.len().max(1));
     let chunk = seeds.len().div_ceil(workers);
 
     std::thread::scope(|s| {
@@ -186,14 +186,7 @@ fn generate_seed_points(
                 let mut rng = rand::rng();
                 for i in 0..seed_chunk.len() {
                     rng.fill_bytes(&mut seed_chunk[i]);
-                    let hash = Sha512::digest(seed_chunk[i]);
-                    let mut base_scalar_bytes = [0u8; 32];
-                    base_scalar_bytes.copy_from_slice(&hash[..32]);
-                    base_scalar_bytes[0] &= 248;
-                    base_scalar_bytes[31] &= 127;
-                    base_scalar_bytes[31] |= 64;
-
-                    let scalar = Scalar::from_bytes_mod_order(base_scalar_bytes);
+                    let scalar = seed_to_scalar(&seed_chunk[i]);
                     scalar_chunk[i] = scalar;
                     let start_dalek = ED25519_BASEPOINT_POINT * scalar;
                     let ext = ExtPoint::from_dalek(&start_dalek);
@@ -258,9 +251,14 @@ impl MintEngine for GpuMkEngine {
                 )
             })?;
 
+        let use_int64 = adapter.features().contains(wgpu::Features::SHADER_INT64);
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("onyun-gpu-device"),
-            required_features: wgpu::Features::empty(),
+            required_features: if use_int64 {
+                wgpu::Features::SHADER_INT64
+            } else {
+                wgpu::Features::empty()
+            },
             required_limits: wgpu::Limits::default(),
             experimental_features: wgpu::ExperimentalFeatures::disabled(),
             memory_hints: wgpu::MemoryHints::Performance,
@@ -270,7 +268,11 @@ impl MintEngine for GpuMkEngine {
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("onyun-ed25519-mint"),
-            source: wgpu::ShaderSource::Wgsl(SHADER_SRC.into()),
+            source: wgpu::ShaderSource::Wgsl(if use_int64 {
+                SHADER_SRC_U64.into()
+            } else {
+                SHADER_SRC.into()
+            }),
         });
 
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -334,7 +336,7 @@ impl MintEngine for GpuMkEngine {
             cache: None,
         });
 
-        let matcher = PrefixMatcher::new(&config.target);
+        let matcher = config.goal.matcher();
         let step_dalek = ED25519_BASEPOINT_POINT * Scalar::from(8u64);
         let step_cached = CachedStepGpu::from_cpu(&CachedStep::from_dalek(&step_dalek));
 
@@ -422,19 +424,25 @@ impl MintEngine for GpuMkEngine {
         let handle = thread::Builder::new()
             .name(format!("onyun-gpu-{}", self.adapter_index))
             .spawn(move || {
-                coordinator_loop(
-                    &device,
-                    &queue,
-                    &pipeline,
-                    &bind_group,
-                    &params_buf,
-                    &points_buf,
-                    &hit_buf,
-                    &staging_bufs,
-                    &matcher,
+                let ctx = GpuContext {
+                    device,
+                    queue,
+                    pipeline,
+                    bind_group,
+                    params_buf,
+                    points_buf,
+                    hit_buf,
+                    staging_bufs,
+                };
+                let seed_state = GpuSeedState {
                     seeds,
                     base_scalars,
                     gpu_points,
+                };
+                coordinator_loop(
+                    &ctx,
+                    &matcher,
+                    seed_state,
                     &telemetry,
                     telemetry_slot,
                     &on_milestone,
@@ -447,20 +455,27 @@ impl MintEngine for GpuMkEngine {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+struct GpuContext {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    pipeline: wgpu::ComputePipeline,
+    bind_group: wgpu::BindGroup,
+    params_buf: wgpu::Buffer,
+    points_buf: wgpu::Buffer,
+    hit_buf: wgpu::Buffer,
+    staging_bufs: [wgpu::Buffer; 2],
+}
+
+struct GpuSeedState {
+    seeds: Vec<[u8; 32]>,
+    base_scalars: Vec<Scalar>,
+    gpu_points: Vec<ExtPointGpu>,
+}
+
 fn coordinator_loop(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    pipeline: &wgpu::ComputePipeline,
-    bind_group: &wgpu::BindGroup,
-    params_buf: &wgpu::Buffer,
-    points_buf: &wgpu::Buffer,
-    hit_buf: &wgpu::Buffer,
-    staging_bufs: &[wgpu::Buffer; 2],
+    ctx: &GpuContext,
     matcher: &PrefixMatcher,
-    mut seeds: Vec<[u8; 32]>,
-    mut base_scalars: Vec<Scalar>,
-    mut gpu_points: Vec<ExtPointGpu>,
+    mut seed_state: GpuSeedState,
     telemetry: &Arc<SharedTelemetry>,
     telemetry_slot: usize,
     on_milestone: &Sender<MintMilestone>,
@@ -484,40 +499,54 @@ fn coordinator_loop(
                        staging_idx: &mut usize,
                        steps_per_dispatch: u32,
                        local_best: usize,
-                       seeds: &mut [[u8; 32]],
-                       base_scalars: &mut [Scalar],
-                       gpu_points: &mut [ExtPointGpu]|
+                       seed_state: &mut GpuSeedState|
      -> InFlight {
         if *step_index >= RESEED_STEPS {
-            generate_seed_points(seeds, base_scalars, gpu_points);
-            queue.write_buffer(points_buf, 0, bytemuck::cast_slice(gpu_points));
+            generate_seed_points(
+                &mut seed_state.seeds,
+                &mut seed_state.base_scalars,
+                &mut seed_state.gpu_points,
+            );
+            ctx.queue.write_buffer(
+                &ctx.points_buf,
+                0,
+                bytemuck::cast_slice(&seed_state.gpu_points),
+            );
             *step_index = 0;
         }
-
         let params = make_params(matcher, local_best, steps_per_dispatch, *step_index as u32);
-        queue.write_buffer(params_buf, 0, bytemuck::bytes_of(&params));
+        ctx.queue
+            .write_buffer(&ctx.params_buf, 0, bytemuck::bytes_of(&params));
 
         let cur_staging = *staging_idx;
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("onyun-encoder"),
-        });
-        encoder.clear_buffer(hit_buf, 0, Some(4));
+        let mut encoder = ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("onyun-encoder"),
+            });
+        encoder.clear_buffer(&ctx.hit_buf, 0, Some(4));
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("onyun-compute-pass"),
                 timestamp_writes: None,
             });
-            pass.set_pipeline(pipeline);
-            pass.set_bind_group(0, bind_group, &[]);
+            pass.set_pipeline(&ctx.pipeline);
+            pass.set_bind_group(0, &ctx.bind_group, &[]);
             pass.dispatch_workgroups(NUM_WORKGROUPS, 1, 1);
         }
-        encoder.copy_buffer_to_buffer(hit_buf, 0, &staging_bufs[cur_staging], 0, hit_buf_size);
+        encoder.copy_buffer_to_buffer(
+            &ctx.hit_buf,
+            0,
+            &ctx.staging_bufs[cur_staging],
+            0,
+            hit_buf_size,
+        );
 
         let started_at = Instant::now();
-        queue.submit(Some(encoder.finish()));
+        ctx.queue.submit(Some(encoder.finish()));
 
         let (tx_map, rx_map) = std::sync::mpsc::channel();
-        staging_bufs[cur_staging]
+        ctx.staging_bufs[cur_staging]
             .slice(..)
             .map_async(wgpu::MapMode::Read, move |res| {
                 let _ = tx_map.send(res);
@@ -541,9 +570,7 @@ fn coordinator_loop(
             &mut staging_idx,
             steps_per_dispatch,
             local_best,
-            &mut seeds,
-            &mut base_scalars,
-            &mut gpu_points,
+            &mut seed_state,
         ))
     } else {
         None
@@ -561,15 +588,13 @@ fn coordinator_loop(
                 &mut staging_idx,
                 steps_per_dispatch,
                 local_best,
-                &mut seeds,
-                &mut base_scalars,
-                &mut gpu_points,
+                &mut seed_state,
             ))
         } else {
             None
         };
 
-        if device.poll(wgpu::PollType::wait_indefinitely()).is_err() {
+        if ctx.device.poll(wgpu::PollType::wait_indefinitely()).is_err() {
             break;
         }
         if !matches!(cur.rx_map.recv(), Ok(Ok(()))) {
@@ -577,7 +602,7 @@ fn coordinator_loop(
         }
 
         let dispatch_ms = cur.started_at.elapsed().as_secs_f64() * 1000.0;
-        let staging = &staging_bufs[cur.staging_idx];
+        let staging = &ctx.staging_bufs[cur.staging_idx];
         let slice = staging.slice(..);
 
         if let Ok(view) = slice.get_mapped_range() {
@@ -596,8 +621,10 @@ fn coordinator_loop(
                 let current_global = telemetry.global_best_len.load(Ordering::Acquire) as usize;
                 if full_matched > current_global {
                     local_best = full_matched;
-                    let scalar = base_scalars[tid] + Scalar::from(exact_step.wrapping_mul(8));
-                    let expanded_secret = derive_expanded_secret(&seeds[tid], exact_step, &scalar);
+                    let scalar =
+                        seed_state.base_scalars[tid] + Scalar::from(exact_step.wrapping_mul(8));
+                    let expanded_secret =
+                        derive_expanded_secret(&seed_state.seeds[tid], exact_step, &scalar);
                     let kp = OnionKeypair {
                         address,
                         public_key: pubkey,
@@ -626,5 +653,201 @@ fn coordinator_loop(
         }
 
         in_flight = next_in_flight;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::Rng;
+
+    #[test]
+    fn gpu_u64_shader_matches_cpu_field_ops() {
+        let Some(adapter) = hardware_adapters().into_iter().next() else {
+            return;
+        };
+        if !adapter.features().contains(wgpu::Features::SHADER_INT64) {
+            return;
+        }
+        let Ok((device, queue)) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("onyun-gpu-test"),
+            required_features: wgpu::Features::SHADER_INT64,
+            required_limits: wgpu::Limits::default(),
+            experimental_features: wgpu::ExperimentalFeatures::disabled(),
+            memory_hints: wgpu::MemoryHints::Performance,
+            trace: wgpu::Trace::Off,
+        })) else {
+            return;
+        };
+
+        let test_src = format!(
+            "{SHADER_SRC_U64}\n\
+            struct TestPair {{ a: Fe, b: Fe, }}\n\
+            struct TestOut {{ mul_words: array<u32, 8>, sq_words: array<u32, 8>, }}\n\
+            @group(1) @binding(0) var<storage, read> test_in: array<TestPair>;\n\
+            @group(1) @binding(1) var<storage, read_write> test_out: array<TestOut>;\n\
+            @compute @workgroup_size(64)\n\
+            fn test_mul_sq(@builtin(global_invocation_id) id: vec3<u32>) {{\n\
+                let idx = id.x;\n\
+                let p = test_in[idx];\n\
+                let m = fe_mul(p.a, p.b);\n\
+                let s = fe_sq(p.a);\n\
+                test_out[idx].mul_words = fe_to_words(m);\n\
+                test_out[idx].sq_words = fe_to_words(s);\n\
+            }}"
+        );
+
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("onyun-u64-test"),
+            source: wgpu::ShaderSource::Wgsl(test_src.into()),
+        });
+
+        #[repr(C)]
+        #[derive(Clone, Copy, Pod, Zeroable)]
+        struct TestPair {
+            a: Fe10,
+            b: Fe10,
+        }
+
+        #[repr(C)]
+        #[derive(Clone, Copy, Pod, Zeroable)]
+        struct TestOut {
+            mul_words: [u32; 8],
+            sq_words: [u32; 8],
+        }
+
+        const N: usize = 256;
+        let mut rng = rand::rng();
+        let mut pairs = Vec::with_capacity(N);
+        let mut expected_mul = Vec::with_capacity(N);
+        let mut expected_sq = Vec::with_capacity(N);
+        let mut buf = [0u8; 32];
+
+        for _ in 0..N {
+            rng.fill_bytes(&mut buf);
+            buf[31] &= 0x7f;
+            let a = Fe::from_bytes(&buf);
+            rng.fill_bytes(&mut buf);
+            buf[31] &= 0x7f;
+            let b = Fe::from_bytes(&buf);
+            pairs.push(TestPair {
+                a: Fe10::from_fe(&a),
+                b: Fe10::from_fe(&b),
+            });
+            expected_mul.push(Fe::mul(&a, &b).to_bytes());
+            expected_sq.push(a.sq().to_bytes());
+        }
+
+        let in_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: (N * std::mem::size_of::<TestPair>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&in_buf, 0, bytemuck::cast_slice(&pairs));
+
+        let out_size = (N * std::mem::size_of::<TestOut>()) as u64;
+        let out_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: out_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let staging = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: out_size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let dummy_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[],
+        });
+        let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[Some(&dummy_bgl), Some(&bgl)],
+            immediate_size: 0,
+        });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: None,
+            layout: Some(&pl),
+            module: &shader,
+            entry_point: Some("test_mul_sq"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
+        let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: in_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: out_buf.as_entire_binding(),
+                },
+            ],
+        });
+        let dummy_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &dummy_bgl,
+            entries: &[],
+        });
+
+        let mut encoder = device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &dummy_bg, &[]);
+            pass.set_bind_group(1, &bg, &[]);
+            pass.dispatch_workgroups((N as u32) / 64, 1, 1);
+        }
+        encoder.copy_buffer_to_buffer(&out_buf, 0, &staging, 0, out_size);
+        queue.submit(Some(encoder.finish()));
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        staging.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+        assert!(matches!(rx.recv(), Ok(Ok(()))));
+
+        let Ok(view) = staging.slice(..).get_mapped_range() else {
+            panic!("failed to map staging buffer");
+        };
+        let results: &[TestOut] = bytemuck::cast_slice(&view);
+        for i in 0..N {
+            assert_eq!(words_to_pubkey(&results[i].mul_words), expected_mul[i], "mul mismatch at {i}");
+            assert_eq!(words_to_pubkey(&results[i].sq_words), expected_sq[i], "sq mismatch at {i}");
+        }
     }
 }

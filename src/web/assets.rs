@@ -32,21 +32,16 @@ fn find_asset(path: &str) -> Option<(&'static str, &'static [u8])> {
 }
 
 fn serve_index() -> Response {
-    if let Some((mime, bytes)) = find_asset("/index.html") {
-        Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, mime)
-            .header(header::CACHE_CONTROL, "no-cache")
-            .body(Body::from(bytes))
-            .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
-    } else {
-        Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
-            .header(header::CACHE_CONTROL, "no-cache")
-            .body(Body::from(FALLBACK_INDEX_HTML))
-            .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
-    }
+    let (mime, body) = match find_asset("/index.html") {
+        Some((mime, bytes)) => (mime, Body::from(bytes)),
+        None => ("text/html; charset=utf-8", Body::from(FALLBACK_INDEX_HTML)),
+    };
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, mime)
+        .header(header::CACHE_CONTROL, "no-cache")
+        .body(body)
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
 pub(super) async fn spa_or_asset(request: Request) -> Response {

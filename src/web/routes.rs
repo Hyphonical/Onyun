@@ -16,6 +16,9 @@ struct ErrorBody {
     error: String,
 }
 
+fn json_error(status: StatusCode, msg: impl Into<String>) -> Response {
+    (status, Json(ErrorBody { error: msg.into() })).into_response()
+}
 #[derive(Serialize)]
 pub(crate) struct OkBody {
     ok: bool,
@@ -43,21 +46,7 @@ pub(crate) async fn get_status(
     let snapshot = if authenticated {
         state.current_snapshot()
     } else {
-        crate::core::engine::MintSnapshot {
-            active: false,
-            completed: false,
-            target: String::new(),
-            best_address: None,
-            best_len: 0,
-            target_len: 0,
-            total_hashes: 0,
-            hashes_since_best: 0,
-            hashes_per_sec: 0.0,
-            elapsed_secs: 0.0,
-            progress: 0.0,
-            pace_ratio: 0.0,
-            eta_secs: None,
-        }
+        crate::core::engine::MintSnapshot::default()
     };
     let selected_engine = crate::core::engine::select_engine(state.default_engine);
     Json(StatusPayload {
@@ -88,22 +77,13 @@ pub(crate) async fn post_login(
         return Json(OkBody { ok: true }).into_response();
     };
     if !auth.verify_credentials(body.username.trim(), &body.password) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(ErrorBody {
-                error: "invalid username or password".into(),
-            }),
-        )
-            .into_response();
+        return json_error(StatusCode::UNAUTHORIZED, "invalid username or password");
     }
     let Some(token) = auth.issue_token() else {
-        return (
+        return json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorBody {
-                error: "failed to issue session token".into(),
-            }),
-        )
-            .into_response();
+            "failed to issue session token",
+        );
     };
     let cookie = format!("{COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800");
     (
@@ -135,13 +115,7 @@ pub(crate) async fn post_mint_start(
         body.devices.as_deref(),
     ) {
         Ok(snapshot) => Json(snapshot).into_response(),
-        Err(err) => (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorBody {
-                error: format!("{err:#}"),
-            }),
-        )
-            .into_response(),
+        Err(err) => json_error(StatusCode::BAD_REQUEST, format!("{err:#}")),
     }
 }
 
@@ -159,13 +133,7 @@ pub(crate) async fn delete_mint(
     Path(target): Path<String>,
 ) -> Response {
     let Ok(normalized) = crate::core::base32::normalize_target(&target) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorBody {
-                error: "invalid target name".into(),
-            }),
-        )
-            .into_response();
+        return json_error(StatusCode::BAD_REQUEST, "invalid target name");
     };
     let active = state.current_snapshot();
     if active.active && active.target == normalized {
@@ -173,23 +141,14 @@ pub(crate) async fn delete_mint(
     }
     let dir = crate::core::storage::target_dir(&state.out_dir, &normalized);
     if !dir.exists() {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(ErrorBody {
-                error: "mint directory not found".into(),
-            }),
-        )
-            .into_response();
+        return json_error(StatusCode::NOT_FOUND, "mint directory not found");
     }
     match std::fs::remove_dir_all(&dir) {
         Ok(()) => Json(OkBody { ok: true }).into_response(),
-        Err(err) => (
+        Err(err) => json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorBody {
-                error: format!("failed to remove mint: {err}"),
-            }),
-        )
-            .into_response(),
+            format!("failed to remove mint: {err}"),
+        ),
     }
 }
 
@@ -198,23 +157,11 @@ pub(crate) async fn export_mint(
     Path(target): Path<String>,
 ) -> Response {
     let Ok(normalized) = crate::core::base32::normalize_target(&target) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorBody {
-                error: "invalid target name".into(),
-            }),
-        )
-            .into_response();
+        return json_error(StatusCode::BAD_REQUEST, "invalid target name");
     };
     let dir = crate::core::storage::target_dir(&state.out_dir, &normalized);
     if !dir.is_dir() {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(ErrorBody {
-                error: "mint directory not found".into(),
-            }),
-        )
-            .into_response();
+        return json_error(StatusCode::NOT_FOUND, "mint directory not found");
     }
 
     let mut archive = Vec::new();
@@ -231,13 +178,10 @@ pub(crate) async fn export_mint(
     }
 
     if !any_file {
-        return (
+        return json_error(
             StatusCode::NOT_FOUND,
-            Json(ErrorBody {
-                error: "no keypair files found in mint directory".into(),
-            }),
-        )
-            .into_response();
+            "no keypair files found in mint directory",
+        );
     }
 
     // Standard ustar EOF: two 512-byte zero blocks.

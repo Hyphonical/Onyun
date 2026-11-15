@@ -59,7 +59,7 @@ struct HitBuffer {
 @group(0) @binding(2) var<storage, read_write> points: array<ExtPoint>;
 @group(0) @binding(3) var<storage, read_write> hit_buf: HitBuffer;
 
-const BATCH_SIZE: u32 = 8u;
+const BATCH_SIZE: u32 = 16u;
 
 fn fe_zero() -> Fe {
     return Fe(array<u32, 10>(0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u));
@@ -585,10 +585,10 @@ fn main(
     let lid = local_id.x;
     var p = points[tid];
 
-    var xs: array<Fe, 8>;
-    var ys: array<Fe, 8>;
-    var zs: array<Fe, 8>;
-    var pre: array<Fe, 8>;
+    var xs: array<Fe, 16>;
+    var ys: array<Fe, 16>;
+    var zs: array<Fe, 16>;
+    var pre: array<Fe, 16>;
 
     for (var step = 0u; step < params.steps_per_dispatch; step = step + 1u) {
         var acc = fe_one();
@@ -651,9 +651,8 @@ fn main(
             inv = fe_mul(inv, zs[i]);
 
             let y_affine = fe_mul(ys[i], z_inv);
-            let top = fe_top_two_words_approx(y_affine);
-            let w0 = byte_swap32(top.x);
-            let w1 = byte_swap32(top.y);
+            let w0 = byte_swap32(y_affine.v[0] | (y_affine.v[1] << 26u));
+            let w1 = byte_swap32((y_affine.v[1] >> 6u) | (y_affine.v[2] << 19u));
 
             if ((w0 & params.mask_hi) == params.expected_hi && (w1 & params.mask_lo) == params.expected_lo) {
                 var words = fe_to_words(y_affine);

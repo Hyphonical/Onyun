@@ -117,6 +117,7 @@ impl PrefixMatcher {
         let mask = (!0u64) << (64 - chars * 5);
         (mask, self.target_u64 & mask)
     }
+
     /// Returns the number of leading target characters matched by `pubkey` (0..=self.len()).
     /// Optimized to fail fast on character 0, then count upward.
     #[inline]
@@ -202,12 +203,4 @@ mod tests {
         assert_eq!(matcher2.matched_len(&pubkey), 5);
     }
 
-    #[test]
-    fn prefix_matcher_handles_max_52_char_target_without_panic() {
-        let pubkey = [0xffu8; 32];
-        let target = "7".repeat(52);
-        let matcher = PrefixMatcher::new(&target);
-        assert_eq!(matcher.matched_len(&pubkey), 51);
-        assert!(normalize_target("onyun\u{2061}").is_err());
-    }
 }

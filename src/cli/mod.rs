@@ -1,15 +1,17 @@
+//! CLI command handlers for `onyun`.
+
 pub(crate) mod args;
 pub(crate) mod help;
 pub(crate) mod render;
 pub(crate) mod style;
+use crate::cli::style::Color;
 
 use crate::cli::args::MintArgs;
-use crate::cli::style::Color;
 use crate::core::base32::normalize_target;
 use crate::core::engine::{
-    MintConfig, MintMilestone, SharedTelemetry, compute_progress, select_engine,
+    MintConfig, MintGoal, MintMilestone, SharedTelemetry, compute_progress, select_engine,
 };
-use crate::core::storage::{load_existing_best, save_keypair_atomic, target_dir};
+use crate::core::storage::{load_existing_best, target_dir};
 use anyhow::Result;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
@@ -21,7 +23,7 @@ pub(crate) fn run_mint(args: &MintArgs) -> Result<()> {
 
     let existing = load_existing_best(&args.out_dir, &target);
     let initial_best_len = existing.as_ref().map_or(0, |(_, len)| *len);
-    let mut best_address = existing.as_ref().map(|(addr, _)| addr.clone());
+    let best_address = existing.as_ref().map(|(addr, _)| addr.clone());
 
     let out_path = target_dir(&args.out_dir, &target);
     let difficulty = format!(
@@ -93,7 +95,7 @@ pub(crate) fn run_mint(args: &MintArgs) -> Result<()> {
 
     let handle = engine.start(
         MintConfig {
-            target: target.clone(),
+            goal: MintGoal::Prefix(target.clone()),
             threads: args.threads,
             telemetry_offset: 0,
         },
@@ -102,42 +104,26 @@ pub(crate) fn run_mint(args: &MintArgs) -> Result<()> {
         Arc::clone(&cancel),
     )?;
 
-    let mut best_len = initial_best_len;
+    let mut milestones = render::MilestoneState {
+        out_dir: &args.out_dir,
+        target: &target,
+        flags,
+        command: "mint",
+        best_len: initial_best_len,
+        best_address,
+        last_mint_at: telemetry.started_at,
+    };
     let mut last_hashes: u64 = 0;
     let mut last_tick = Instant::now();
-    let mut last_mint_at = telemetry.started_at;
-    let mut ewma_rate: f64 = 0.0;
+    let mut ewma = render::EwmaRate::default();
 
-    while !cancel.load(Ordering::Relaxed) && best_len < target.len() {
-        while let Ok(milestone) = rx.try_recv() {
-            if milestone.matched_len > best_len {
-                let now = Instant::now();
-                let delta = now.duration_since(last_mint_at);
-                last_mint_at = now;
-
-                best_len = milestone.matched_len;
-                telemetry.record_new_best(best_len);
-                best_address = Some(milestone.keypair.address.clone());
-
-                if let Err(err) = save_keypair_atomic(&args.out_dir, &target, &milestone.keypair) {
-                    render::failure(flags, "mint", &format!("autosave failed: {err}"));
-                } else {
-                    let msg = format!(
-                        "{} ({})",
-                        milestone.keypair.address,
-                        render::format_delta(delta)
-                    );
-                    render::done(flags, "mint", &format!("{best_len}/{}", target.len()), &msg);
-                }
-
-                if best_len >= target.len() {
-                    cancel.store(true, Ordering::SeqCst);
-                    break;
-                }
-            }
+    while !cancel.load(Ordering::Relaxed) && milestones.best_len < target.len() {
+        if milestones.drain(&rx, &telemetry) {
+            cancel.store(true, Ordering::SeqCst);
+            break;
         }
 
-        if best_len >= target.len() || cancel.load(Ordering::Relaxed) {
+        if milestones.best_len >= target.len() || cancel.load(Ordering::Relaxed) {
             break;
         }
 
@@ -147,22 +133,17 @@ pub(crate) fn run_mint(args: &MintArgs) -> Result<()> {
         let dt = now.duration_since(last_tick).as_secs_f64().max(0.001);
         let total = telemetry.total_hashes();
         let delta = total.saturating_sub(last_hashes);
-        let inst_rate = (delta as f64) / dt;
-        ewma_rate = if ewma_rate == 0.0 {
-            inst_rate
-        } else {
-            let alpha = 1.0 - (-dt / 0.8).exp();
-            alpha * inst_rate + (1.0 - alpha) * ewma_rate
-        };
+        ewma.update(delta, dt);
         last_hashes = total;
         last_tick = now;
 
         let hashes_since_best =
             total.saturating_sub(telemetry.hashes_at_last_best.load(Ordering::Relaxed));
+        let rate = ewma.get();
         let (progress, _pace, eta) =
-            compute_progress(best_len, target.len(), hashes_since_best, ewma_rate);
+            compute_progress(milestones.best_len, target.len(), hashes_since_best, rate);
 
-        render::progress_line(flags, progress, best_len, target.len(), ewma_rate, eta);
+        render::progress_line(flags, progress, milestones.best_len, target.len(), rate, eta);
     }
 
     cancel.store(true, Ordering::SeqCst);
@@ -173,32 +154,11 @@ pub(crate) fn run_mint(args: &MintArgs) -> Result<()> {
     let total_hashes = telemetry.total_hashes();
     let avg_rate = (total_hashes as f64) / elapsed.as_secs_f64().max(0.001);
 
-    if let Some(addr) = &best_address {
+    if let Some(addr) = &milestones.best_address {
         if flags.quiet {
             println!("{addr}");
         } else {
-            render::row(
-                flags,
-                "mint",
-                "Elapsed",
-                &render::format_duration(elapsed),
-                Color::Dim,
-            );
-            render::row(
-                flags,
-                "mint",
-                "Speed",
-                &render::format_rate(avg_rate),
-                Color::Dim,
-            );
-            render::row(
-                flags,
-                "mint",
-                "Saved",
-                &out_path.display().to_string(),
-                Color::Accent,
-            );
-            render::blank(flags);
+            render::mint_summary(flags, "mint", elapsed, avg_rate, Some(&out_path));
         }
     }
 

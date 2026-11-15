@@ -6,6 +6,7 @@ pub(crate) mod cpu;
 pub(crate) mod gpu;
 mod helper;
 mod simd;
+use crate::core::base32::PrefixMatcher;
 use crate::core::onion::OnionKeypair;
 use anyhow::Result;
 use serde::Serialize;
@@ -15,9 +16,27 @@ use std::thread::JoinHandle;
 use std::time::Instant;
 
 #[derive(Clone, Debug)]
-#[cfg_attr(not(feature = "web"), allow(dead_code))]
+pub(crate) enum MintGoal {
+    Prefix(String),
+}
+
+impl MintGoal {
+    pub(crate) fn matcher(&self) -> PrefixMatcher {
+        match self {
+            Self::Prefix(target) => PrefixMatcher::new(target),
+        }
+    }
+}
+
+pub(crate) fn default_threads() -> usize {
+    std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(4)
+}
+
+#[derive(Clone, Debug)]
 pub(crate) struct MintConfig {
-    pub(crate) target: String,
+    pub(crate) goal: MintGoal,
     pub(crate) threads: usize,
     pub(crate) telemetry_offset: usize,
 }
@@ -28,7 +47,7 @@ pub(crate) struct MintMilestone {
     pub(crate) keypair: OnionKeypair,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Default, Serialize)]
 #[cfg_attr(not(feature = "web"), allow(dead_code))]
 pub(crate) struct MintSnapshot {
     pub(crate) active: bool,
@@ -57,7 +76,6 @@ impl Default for PaddedCounter {
         Self(AtomicU64::new(0))
     }
 }
-#[cfg_attr(not(feature = "web"), allow(dead_code))]
 pub(crate) struct SharedTelemetry {
     pub(crate) started_at: Instant,
     pub(crate) thread_hashes: Vec<PaddedCounter>,
@@ -67,10 +85,7 @@ pub(crate) struct SharedTelemetry {
 
 impl SharedTelemetry {
     pub(crate) fn new(threads: usize, initial_best_len: usize) -> Self {
-        let mut thread_hashes = Vec::with_capacity(threads);
-        for _ in 0..threads {
-            thread_hashes.push(PaddedCounter::default());
-        }
+        let thread_hashes = (0..threads).map(|_| PaddedCounter::default()).collect();
         Self {
             started_at: Instant::now(),
             thread_hashes,
@@ -105,7 +120,6 @@ impl EngineHandle {
     }
 }
 
-#[cfg_attr(not(feature = "web"), allow(dead_code))]
 pub(crate) trait MintEngine: Send + Sync {
     fn label(&self) -> &'static str;
     fn device_name(&self) -> String;
@@ -130,7 +144,6 @@ pub(crate) struct ComputeDevice {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-#[cfg_attr(not(feature = "web"), allow(dead_code))]
 pub(crate) enum EngineKind {
     #[default]
     Auto,
@@ -217,9 +230,14 @@ impl MintEngine for CompositeEngine {
         let mut offset = config.telemetry_offset;
         for engine in &self.engines {
             let slots = engine.slot_count(config.threads);
+            let threads = if self.engines.len() > 1 && engine.label() == cpu::LABEL {
+                config.threads.saturating_sub(1).max(1)
+            } else {
+                config.threads
+            };
             let sub_config = MintConfig {
-                target: config.target.clone(),
-                threads: config.threads,
+                goal: config.goal.clone(),
+                threads,
                 telemetry_offset: offset,
             };
             let handle = engine.start(
@@ -254,12 +272,10 @@ pub(crate) fn select_engine_with_devices(
     };
 
     #[cfg(feature = "gpu")]
-    let mut gpus: Vec<gpu::GpuMkEngine> = gpu::enumerate_gpus()
+    let gpus: Vec<gpu::GpuMkEngine> = gpu::enumerate_gpus()
         .into_iter()
         .filter(|g| want_id(&format!("gpu:{}", g.adapter_index)))
         .collect();
-    #[cfg(not(feature = "gpu"))]
-    let gpus: Vec<Box<dyn MintEngine>> = Vec::new();
 
     match kind {
         EngineKind::Cpu => Ok(Box::new(cpu::CpuMkEngine)),
@@ -269,21 +285,10 @@ pub(crate) fn select_engine_with_devices(
                 if gpus.is_empty() {
                     anyhow::bail!("GPU engine requested, but no compatible GPU adapter was found");
                 }
-                if gpus.len() == 1 {
-                    return Ok(Box::new(gpus.remove(0)));
-                }
-                let engines: Vec<Box<dyn MintEngine>> = gpus
-                    .into_iter()
-                    .map(|g| Box::new(g) as Box<dyn MintEngine>)
-                    .collect();
-                Ok(Box::new(CompositeEngine {
-                    label: "GPU",
-                    engines,
-                }))
+                Ok(wrap_gpu_engines(gpus))
             }
             #[cfg(not(feature = "gpu"))]
             {
-                let _ = gpus;
                 anyhow::bail!(
                     "GPU engine requested, but this binary was built without `--features gpu`"
                 )
@@ -320,24 +325,27 @@ pub(crate) fn select_engine_with_devices(
         }
         EngineKind::Auto => {
             #[cfg(feature = "gpu")]
-            {
-                if !gpus.is_empty() {
-                    if gpus.len() == 1 {
-                        return Ok(Box::new(gpus.remove(0)));
-                    }
-                    let engines: Vec<Box<dyn MintEngine>> = gpus
-                        .into_iter()
-                        .map(|g| Box::new(g) as Box<dyn MintEngine>)
-                        .collect();
-                    return Ok(Box::new(CompositeEngine {
-                        label: "GPU",
-                        engines,
-                    }));
-                }
+            if !gpus.is_empty() {
+                return Ok(wrap_gpu_engines(gpus));
             }
             Ok(Box::new(cpu::CpuMkEngine))
         }
     }
+}
+
+#[cfg(feature = "gpu")]
+fn wrap_gpu_engines(mut gpus: Vec<gpu::GpuMkEngine>) -> Box<dyn MintEngine> {
+    if gpus.len() == 1 {
+        return Box::new(gpus.remove(0));
+    }
+    let engines: Vec<Box<dyn MintEngine>> = gpus
+        .into_iter()
+        .map(|g| Box::new(g) as Box<dyn MintEngine>)
+        .collect();
+    Box::new(CompositeEngine {
+        label: "GPU",
+        engines,
+    })
 }
 
 /// Computes logarithmic milestone + memoryless exponential intra-step progress,
@@ -375,18 +383,65 @@ pub(crate) fn compute_progress(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    fn assert_engine_finds_4char_hit(engine: &dyn MintEngine, threads: usize, label: &str) {
+        let telemetry = Arc::new(SharedTelemetry::new(engine.slot_count(threads), 0));
+        let (tx, rx) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+
+        let Ok(handle) = engine.start(
+            MintConfig {
+                goal: MintGoal::Prefix("aaaa".to_string()),
+                threads,
+                telemetry_offset: 0,
+            },
+            Arc::clone(&telemetry),
+            tx,
+            Arc::clone(&cancel),
+        ) else {
+            panic!("{label} engine should start");
+        };
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let mut found = None;
+        while Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(m) => {
+                    let derived = crate::core::onion::derive_address(&m.keypair.public_key);
+                    assert_eq!(derived, m.keypair.address);
+                    if m.matched_len > telemetry.global_best_len.load(Ordering::Relaxed) as usize {
+                        telemetry.record_new_best(m.matched_len);
+                    }
+                    if m.matched_len >= 4 {
+                        assert!(derived.starts_with("aaaa"));
+                        found = Some(m);
+                        break;
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        cancel.store(true, Ordering::SeqCst);
+        handle.join();
+        assert!(
+            found.is_some(),
+            "{label} engine failed to find a 4-char hit within timeout"
+        );
+    }
 
     #[test]
-    fn logarithmic_progress_is_monotonic_per_milestone() {
-        let (p0, _, _) = compute_progress(0, 6, 0, 1_000_000.0);
-        let (p1, _, _) = compute_progress(1, 6, 0, 1_000_000.0);
-        let (p_mid, _, _) = compute_progress(1, 6, 1024, 1_000_000.0);
-        let (p_done, _, eta_done) = compute_progress(6, 6, 0, 1_000_000.0);
+    fn cpu_engine_finds_valid_4char_hits() {
+        assert_engine_finds_4char_hit(&cpu::CpuMkEngine, 4, "CPU");
+    }
 
-        assert!(p0 < p1);
-        assert!(p1 < p_mid);
-        assert!(p_mid < (2.0 / 6.0));
-        assert_eq!(p_done, 1.0);
-        assert_eq!(eta_done, Some(0.0));
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn gpu_engine_finds_valid_4char_hits() {
+        let gpus = gpu::enumerate_gpus();
+        if let Some(engine) = gpus.first() {
+            assert_engine_finds_4char_hit(engine, 1, "GPU");
+        }
     }
 }

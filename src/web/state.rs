@@ -4,10 +4,10 @@ use crate::cli::render::{self, OutputFlags};
 use crate::cli::style::Color;
 use crate::core::base32::normalize_target;
 use crate::core::engine::{
-    ComputeDevice, EngineHandle, EngineKind, MintConfig, MintMilestone, MintSnapshot,
-    SharedTelemetry, compute_progress, list_devices, select_engine_with_devices,
+    ComputeDevice, EngineHandle, EngineKind, MintConfig, MintGoal, MintMilestone, MintSnapshot,
+    SharedTelemetry, compute_progress, default_threads, list_devices, select_engine_with_devices,
 };
-use crate::core::storage::{load_existing_best, save_keypair_atomic, target_dir};
+use crate::core::storage::{load_existing_best, target_dir};
 use anyhow::{Result, bail};
 use hmac::{Hmac, KeyInit, Mac};
 use rand::Rng;
@@ -145,9 +145,7 @@ impl AppState {
         default_engine: EngineKind,
         flags: OutputFlags,
     ) -> Arc<Self> {
-        let cpu_threads = std::thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(4);
+        let cpu_threads = default_threads();
         let devices = list_devices();
         let (events_tx, _) = broadcast::channel(64);
         Arc::new(Self {
@@ -157,21 +155,7 @@ impl AppState {
             devices,
             flags,
             cpu_threads,
-            snapshot: Mutex::new(MintSnapshot {
-                active: false,
-                completed: false,
-                target: String::new(),
-                best_address: None,
-                best_len: 0,
-                target_len: 0,
-                total_hashes: 0,
-                hashes_since_best: 0,
-                hashes_per_sec: 0.0,
-                elapsed_secs: 0.0,
-                progress: 0.0,
-                pace_ratio: 0.0,
-                eta_secs: None,
-            }),
+            snapshot: Mutex::new(MintSnapshot::default()),
             active_job: Mutex::new(None),
             events_tx,
         })
@@ -230,7 +214,7 @@ impl AppState {
 
         let existing = load_existing_best(&self.out_dir, &target);
         let initial_best_len = existing.as_ref().map_or(0, |(_, len)| *len);
-        let mut best_address = existing.as_ref().map(|(addr, _)| addr.clone());
+        let best_address = existing.as_ref().map(|(addr, _)| addr.clone());
         let out_path = target_dir(&self.out_dir, &target);
         let flags = self.flags;
 
@@ -292,7 +276,7 @@ impl AppState {
 
         let handle: EngineHandle = engine.start(
             MintConfig {
-                target: target.clone(),
+                goal: MintGoal::Prefix(target.clone()),
                 threads,
                 telemetry_offset: 0,
             },
@@ -324,44 +308,25 @@ impl AppState {
         let target_owned = target.clone();
 
         let coordinator = thread::spawn(move || {
-            let mut best_len = initial_best_len;
+            let mut milestones = render::MilestoneState {
+                out_dir: &out_dir,
+                target: &target_owned,
+                flags,
+                command: "ui",
+                best_len: initial_best_len,
+                best_address,
+                last_mint_at: telemetry.started_at,
+            };
             let mut last_hashes: u64 = 0;
             let mut last_tick = Instant::now();
-            let mut last_mint_at = telemetry.started_at;
-            let mut ewma_rate: f64 = 0.0;
+            let mut ewma = render::EwmaRate::default();
 
-            while !cancel_worker.load(Ordering::Relaxed) && best_len < target_owned.len() {
-                while let Ok(milestone) = rx.try_recv() {
-                    if milestone.matched_len > best_len {
-                        let now = Instant::now();
-                        let delta = now.duration_since(last_mint_at);
-                        last_mint_at = now;
-
-                        best_len = milestone.matched_len;
-                        telemetry.record_new_best(best_len);
-                        best_address = Some(milestone.keypair.address.clone());
-                        if let Err(err) =
-                            save_keypair_atomic(&out_dir, &target_owned, &milestone.keypair)
-                        {
-                            render::failure(flags, "ui", &format!("autosave failed: {err}"));
-                        } else {
-                            let msg = format!(
-                                "{} ({})",
-                                milestone.keypair.address,
-                                render::format_delta(delta)
-                            );
-                            render::done(
-                                flags,
-                                "ui",
-                                &format!("{best_len}/{}", target_owned.len()),
-                                &msg,
-                            );
-                        }
-                        if best_len >= target_owned.len() {
-                            cancel_worker.store(true, Ordering::SeqCst);
-                            break;
-                        }
-                    }
+            while !cancel_worker.load(Ordering::Relaxed)
+                && milestones.best_len < target_owned.len()
+            {
+                if milestones.drain(&rx, &telemetry) {
+                    cancel_worker.store(true, Ordering::SeqCst);
+                    break;
                 }
 
                 let now = Instant::now();
@@ -369,33 +334,32 @@ impl AppState {
                 let total_hashes = telemetry.total_hashes();
                 let delta_hashes = total_hashes.saturating_sub(last_hashes);
                 if dt > 0.02 {
-                    let inst_rate = (delta_hashes as f64) / dt;
-                    ewma_rate = if ewma_rate == 0.0 {
-                        inst_rate
-                    } else {
-                        let alpha = 1.0 - (-dt / 0.8).exp();
-                        alpha * inst_rate + (1.0 - alpha) * ewma_rate
-                    };
+                    ewma.update(delta_hashes, dt);
                     last_hashes = total_hashes;
                     last_tick = now;
                 }
 
                 let hashes_at_best = telemetry.hashes_at_last_best.load(Ordering::Relaxed);
                 let hashes_since_best = total_hashes.saturating_sub(hashes_at_best);
-                let (progress, pace_ratio, eta_secs) =
-                    compute_progress(best_len, target_owned.len(), hashes_since_best, ewma_rate);
+                let rate = ewma.get();
+                let (progress, pace_ratio, eta_secs) = compute_progress(
+                    milestones.best_len,
+                    target_owned.len(),
+                    hashes_since_best,
+                    rate,
+                );
 
-                let completed = best_len >= target_owned.len();
+                let completed = milestones.best_len >= target_owned.len();
                 let snap = MintSnapshot {
                     active: !completed && !cancel_worker.load(Ordering::Relaxed),
                     completed,
                     target: target_owned.clone(),
-                    best_address: best_address.clone(),
-                    best_len,
+                    best_address: milestones.best_address.clone(),
+                    best_len: milestones.best_len,
                     target_len: target_owned.len(),
                     total_hashes,
                     hashes_since_best,
-                    hashes_per_sec: if completed { 0.0 } else { ewma_rate },
+                    hashes_per_sec: if completed { 0.0 } else { rate },
                     elapsed_secs: telemetry.started_at.elapsed().as_secs_f64(),
                     progress,
                     pace_ratio,
@@ -413,76 +377,41 @@ impl AppState {
             handle.join();
 
             // Drain any final milestone delivered just as workers exited.
-            while let Ok(milestone) = rx.try_recv() {
-                if milestone.matched_len > best_len {
-                    let now = Instant::now();
-                    let delta = now.duration_since(last_mint_at);
-                    last_mint_at = now;
-
-                    best_len = milestone.matched_len;
-                    telemetry.record_new_best(best_len);
-                    best_address = Some(milestone.keypair.address.clone());
-                    if let Err(err) =
-                        save_keypair_atomic(&out_dir, &target_owned, &milestone.keypair)
-                    {
-                        render::failure(flags, "ui", &format!("autosave failed: {err}"));
-                    } else {
-                        let msg = format!(
-                            "{} ({})",
-                            milestone.keypair.address,
-                            render::format_delta(delta)
-                        );
-                        render::done(
-                            flags,
-                            "ui",
-                            &format!("{best_len}/{}", target_owned.len()),
-                            &msg,
-                        );
-                    }
-                }
-            }
+            milestones.drain(&rx, &telemetry);
 
             let elapsed = telemetry.started_at.elapsed();
             let total_hashes = telemetry.total_hashes();
             let avg_rate = (total_hashes as f64) / elapsed.as_secs_f64().max(0.001);
-            render::row(
+            render::mint_summary(
                 flags,
                 "ui",
-                "Elapsed",
-                &render::format_duration(elapsed),
-                Color::Dim,
+                elapsed,
+                avg_rate,
+                milestones
+                    .best_address
+                    .is_some()
+                    .then_some(out_path.as_path()),
             );
-            render::row(
-                flags,
-                "ui",
-                "Speed",
-                &render::format_rate(avg_rate),
-                Color::Dim,
-            );
-            if best_address.is_some() {
-                render::row(
-                    flags,
-                    "ui",
-                    "Saved",
-                    &out_path.display().to_string(),
-                    Color::Accent,
-                );
-            }
-            render::blank(flags);
 
             let hashes_at_best = telemetry.hashes_at_last_best.load(Ordering::Relaxed);
             let hashes_since_best = total_hashes.saturating_sub(hashes_at_best);
-            let completed = best_len >= target_owned.len();
-            let (progress, pace_ratio, eta_secs) =
-                compute_progress(best_len, target_owned.len(), hashes_since_best, ewma_rate);
+            let completed = milestones.best_len >= target_owned.len();
+            let (progress, pace_ratio, eta_secs) = compute_progress(
+                milestones.best_len,
+                target_owned.len(),
+                hashes_since_best,
+                ewma.get(),
+            );
 
+            let final_best_len = milestones.best_len;
+            let final_best_address = milestones.best_address;
             state.set_snapshot(MintSnapshot {
                 active: false,
                 completed,
+                target_len: target_owned.len().max(final_best_len),
                 target: target_owned,
-                best_address,
-                best_len,
-                target_len: target_len_safe(best_len, state.current_snapshot().target_len),
+                best_address: final_best_address,
+                best_len: final_best_len,
                 total_hashes,
                 hashes_since_best,
                 hashes_per_sec: 0.0,
@@ -526,7 +455,8 @@ impl AppState {
             else {
                 continue;
             };
-            let hostname_path = target_dir(&self.out_dir, &target).join("hostname");
+            let dir = target_dir(&self.out_dir, &target);
+            let hostname_path = dir.join("hostname");
             let modified_at = std::fs::metadata(&hostname_path)
                 .and_then(|m| m.modified())
                 .ok()
@@ -540,17 +470,11 @@ impl AppState {
                 target_len,
                 completed: matched_len >= target_len,
                 modified_at,
-                path: target_dir(&self.out_dir, &item.file_name().to_string_lossy())
-                    .display()
-                    .to_string(),
+                path: dir.display().to_string(),
             });
         }
 
         entries.sort_by_key(|a| std::cmp::Reverse(a.modified_at));
         entries
     }
-}
-
-fn target_len_safe(best_len: usize, stored_target_len: usize) -> usize {
-    stored_target_len.max(best_len)
 }

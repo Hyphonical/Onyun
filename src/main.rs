@@ -1,3 +1,5 @@
+//! Onyun CLI and UI entrypoint.
+
 mod cli;
 mod core;
 #[cfg(feature = "web")]

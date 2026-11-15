@@ -1,10 +1,15 @@
 //! Human-facing CLI output, formatting helpers, and logarithmic progress bar.
 
 use super::style::{self, Color};
+use crate::core::engine::{MintMilestone, SharedTelemetry};
+use crate::core::storage::save_keypair_atomic;
 use std::borrow::Cow;
 use std::io::{self, IsTerminal, Write};
+use std::path::Path;
 use std::sync::LazyLock;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::mpsc::Receiver;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
 const RULE_WIDTH: usize = 80;
 const BAR_WIDTH: usize = 28;
 
@@ -14,9 +19,12 @@ pub(crate) struct OutputFlags {
     pub(crate) no_color: bool,
 }
 
-static INTERACTIVE: LazyLock<bool> = LazyLock::new(|| {
-    std::io::stderr().is_terminal() && std::env::var_os("TERM").is_none_or(|t| t != "dumb")
-});
+pub(super) fn is_tty_interactive(is_tty: bool) -> bool {
+    is_tty && std::env::var_os("TERM").is_none_or(|t| t != "dumb")
+}
+
+static INTERACTIVE: LazyLock<bool> =
+    LazyLock::new(|| is_tty_interactive(std::io::stderr().is_terminal()));
 
 pub(crate) fn interactive() -> bool {
     *INTERACTIVE
@@ -43,12 +51,17 @@ pub(crate) fn blank(flags: OutputFlags) {
     }
 }
 
+pub(super) fn rule_segments(label: &str) -> (Cow<'_, str>, String) {
+    let label = clean(label);
+    let rest = "━".repeat(RULE_WIDTH.saturating_sub(label.chars().count() + 8));
+    (label, rest)
+}
+
 pub(crate) fn rule(flags: OutputFlags, label: &str) {
     if flags.quiet || !interactive() {
         return;
     }
-    let label = clean(label);
-    let rest = "━".repeat(RULE_WIDTH.saturating_sub(label.chars().count() + 8));
+    let (label, rest) = rule_segments(label);
     eprintln!(
         "  {}  {}  {}",
         style::paint("━━", Color::Muted, colored(flags)),
@@ -57,7 +70,7 @@ pub(crate) fn rule(flags: OutputFlags, label: &str) {
     );
 }
 
-pub(crate) fn event(flags: OutputFlags, command: &str, message: &str) {
+fn event(flags: OutputFlags, command: &str, message: &str) {
     if flags.quiet {
         return;
     }
@@ -205,6 +218,7 @@ pub(crate) fn format_delta(d: Duration) -> String {
         format_duration_secs(secs)
     }
 }
+
 pub(crate) fn format_duration_secs(secs: f64) -> String {
     if !secs.is_finite() || secs > 31_536_000.0 * 10.0 {
         return ">10y".to_string();
@@ -245,4 +259,94 @@ fn utc_timestamp() -> String {
     let year = y + i64::from(m <= 2);
 
     format!("{year:04}-{m:02}-{d:02}T{hour:02}:{min:02}:{sec:02}Z")
+}
+
+#[derive(Default)]
+pub(crate) struct EwmaRate(f64);
+
+impl EwmaRate {
+    pub(crate) fn update(&mut self, delta_hashes: u64, dt_secs: f64) {
+        let inst_rate = (delta_hashes as f64) / dt_secs;
+        self.0 = if self.0 == 0.0 {
+            inst_rate
+        } else {
+            let alpha = 1.0 - (-dt_secs / 0.8).exp();
+            alpha * inst_rate + (1.0 - alpha) * self.0
+        };
+    }
+
+    pub(crate) fn get(&self) -> f64 {
+        self.0
+    }
+}
+
+pub(crate) struct MilestoneState<'a> {
+    pub(crate) out_dir: &'a Path,
+    pub(crate) target: &'a str,
+    pub(crate) flags: OutputFlags,
+    pub(crate) command: &'a str,
+    pub(crate) best_len: usize,
+    pub(crate) best_address: Option<String>,
+    pub(crate) last_mint_at: Instant,
+}
+
+impl MilestoneState<'_> {
+    pub(crate) fn drain(
+        &mut self,
+        rx: &Receiver<MintMilestone>,
+        telemetry: &SharedTelemetry,
+    ) -> bool {
+        let mut reached_target = false;
+        while let Ok(milestone) = rx.try_recv() {
+            if milestone.matched_len > self.best_len {
+                let now = Instant::now();
+                let delta = now.duration_since(self.last_mint_at);
+                self.last_mint_at = now;
+
+                self.best_len = milestone.matched_len;
+                telemetry.record_new_best(self.best_len);
+                self.best_address = Some(milestone.keypair.address.clone());
+
+                if let Err(err) =
+                    save_keypair_atomic(self.out_dir, self.target, &milestone.keypair)
+                {
+                    failure(self.flags, self.command, &format!("autosave failed: {err}"));
+                } else {
+                    let msg = format!("{} ({})", milestone.keypair.address, format_delta(delta));
+                    done(
+                        self.flags,
+                        self.command,
+                        &format!("{}/{}", self.best_len, self.target.len()),
+                        &msg,
+                    );
+                }
+
+                if self.best_len >= self.target.len() {
+                    reached_target = true;
+                    break;
+                }
+            }
+        }
+        reached_target
+    }
+}
+pub(crate) fn mint_summary(
+    flags: OutputFlags,
+    command: &str,
+    elapsed: Duration,
+    avg_rate: f64,
+    saved_path: Option<&Path>,
+) {
+    row(flags, command, "Elapsed", &format_duration(elapsed), Color::Dim);
+    row(flags, command, "Speed", &format_rate(avg_rate), Color::Dim);
+    if let Some(path) = saved_path {
+        row(
+            flags,
+            command,
+            "Saved",
+            &path.display().to_string(),
+            Color::Accent,
+        );
+    }
+    blank(flags);
 }

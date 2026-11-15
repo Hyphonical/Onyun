@@ -126,7 +126,7 @@ class OnyunStore {
       this.deviceName = status.device_name || status.engine;
       this.devices = status.devices ?? [];
       if (this.enabledDevices.length === 0 && this.devices.length > 0) {
-        this.enabledDevices = this.devices.map((d) => d.id);
+        this.enabledDevices = this.defaultDevicesForMode(this.engineMode);
       }
       this.cpuThreads = status.cpu_threads;
       this.threadsInput = status.cpu_threads;
@@ -191,17 +191,22 @@ class OnyunStore {
     }
   }
 
+  private defaultDevicesForMode(mode: EngineMode): string[] {
+    if (mode === 'cpu') {
+      return this.devices.filter((d) => d.kind === 'cpu').map((d) => d.id);
+    }
+    if (mode === 'gpu' || mode === 'auto') {
+      const gpus = this.devices.filter((d) => d.kind === 'gpu').map((d) => d.id);
+      if (gpus.length > 0) return gpus;
+      return this.devices.filter((d) => d.kind === 'cpu').map((d) => d.id);
+    }
+    return this.devices.map((d) => d.id);
+  }
+
   setEngineMode(mode: EngineMode) {
     if (this.snapshot.active) return;
     this.engineMode = mode;
-    if (mode === 'cpu') {
-      this.enabledDevices = this.devices.filter((d) => d.kind === 'cpu').map((d) => d.id);
-    } else if (mode === 'gpu') {
-      const gpus = this.devices.filter((d) => d.kind === 'gpu').map((d) => d.id);
-      if (gpus.length > 0) this.enabledDevices = gpus;
-    } else if (mode === 'hybrid' && this.enabledDevices.length === 0) {
-      this.enabledDevices = this.devices.map((d) => d.id);
-    }
+    this.enabledDevices = this.defaultDevicesForMode(mode);
   }
 
   private connectSse() {

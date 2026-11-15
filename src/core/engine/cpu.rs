@@ -5,14 +5,16 @@
 use crate::core::base32::PrefixMatcher;
 #[cfg(test)]
 use crate::core::engine::helper::{CachedStep, ExtPoint};
-use crate::core::engine::helper::{Fe, MontPoint, MontStep, derive_expanded_secret};
-use crate::core::engine::{EngineHandle, MintConfig, MintEngine, MintMilestone, SharedTelemetry};
-use crate::core::onion::{OnionKeypair, derive_address};
+use crate::core::engine::helper::{
+    CandidateHit, Fe, MontPoint, MontStep, refresh_fast_mask, report_candidate_hit, seed_to_scalar,
+};
+use crate::core::engine::{
+    EngineHandle, MintConfig, MintEngine, MintMilestone, SharedTelemetry, default_threads,
+};
 use anyhow::Result;
 use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
 use curve25519_dalek::scalar::Scalar;
 use rand::Rng;
-use sha2::{Digest, Sha512};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc::Sender};
 use std::thread;
@@ -50,7 +52,7 @@ impl MintEngine for CpuMkEngine {
         format!(
             "{} ({} cores)",
             std::env::consts::ARCH,
-            crate::cli::args::default_threads()
+            default_threads()
         )
     }
 
@@ -65,7 +67,7 @@ impl MintEngine for CpuMkEngine {
         on_milestone: Sender<MintMilestone>,
         cancel: Arc<AtomicBool>,
     ) -> Result<EngineHandle> {
-        let matcher = PrefixMatcher::new(&config.target);
+        let matcher = config.goal.matcher();
         let step_dalek = ED25519_BASEPOINT_POINT * Scalar::from(8u64);
         let step_mont = MontStep::from_dalek(&step_dalek);
         let mut workers = Vec::with_capacity(config.threads);
@@ -126,7 +128,7 @@ fn worker_loop(
     cancel: &AtomicBool,
 ) {
     let mut rng = rand::rng();
-    let mut local_best = telemetry.global_best_len.load(Ordering::Relaxed) as usize;
+    let local_best = telemetry.global_best_len.load(Ordering::Relaxed) as usize;
     let target_len = matcher.len();
 
     let mut denom = [Fe::ZERO; BATCH_SIZE];
@@ -136,8 +138,8 @@ fn worker_loop(
     let mut local_hashes: u64 = 0;
     let mut batch_count: usize = 0;
 
-    let mut needed_chars = (local_best + 1).min(target_len);
-    let (mut mask64, mut expected64) = matcher.fast_mask_u64(needed_chars);
+    let (mut local_best, mut mask64, mut expected64) =
+        refresh_fast_mask(matcher, local_best, target_len);
 
     let mut seeds = [[0u8; 32]; STREAMS];
     let mut base_scalars = [Scalar::ZERO; STREAMS];
@@ -154,14 +156,7 @@ fn worker_loop(
     while !cancel.load(Ordering::Relaxed) && local_best < target_len {
         for s in 0..STREAMS {
             rng.fill_bytes(&mut seeds[s]);
-            let hash = Sha512::digest(seeds[s]);
-            let mut base_scalar_bytes = [0u8; 32];
-            base_scalar_bytes.copy_from_slice(&hash[..32]);
-            base_scalar_bytes[0] &= 248;
-            base_scalar_bytes[31] &= 127;
-            base_scalar_bytes[31] |= 64;
-
-            base_scalars[s] = Scalar::from_bytes_mod_order(base_scalar_bytes);
+            base_scalars[s] = seed_to_scalar(&seeds[s]);
             let p0 = ED25519_BASEPOINT_POINT * base_scalars[s];
             let p_prev = ED25519_BASEPOINT_POINT * (base_scalars[s] - step8);
             currents[s] = MontPoint::from_dalek(&p0);
@@ -204,7 +199,7 @@ fn worker_loop(
                 };
 
                 let y_affine = Fe::mul(&numer[i], &d_inv);
-                if (y_affine.first_u64_be() & mask64) != expected64 {
+                if (y_affine.first_u64_be_weak() & mask64) != expected64 {
                     continue;
                 }
 
@@ -217,35 +212,22 @@ fn worker_loop(
 
                 let matched = matcher.matched_len(&pubkey);
                 if matched > local_best || (target_len == 52 && matched == 51) {
-                    let global_best = telemetry.global_best_len.load(Ordering::Acquire) as usize;
-                    if matched > global_best || (target_len == 52 && matched == 51) {
-                        let address = derive_address(&pubkey);
-                        let full_matched = matcher.matched_len_hostname(&address);
-                        if full_matched > global_best {
-                            local_best = full_matched;
-                            needed_chars = (local_best + 1).min(target_len);
-                            (mask64, expected64) = matcher.fast_mask_u64(needed_chars);
-
-                            let expanded_secret =
-                                derive_expanded_secret(&seeds[s], exact_step, &scalar);
-                            let kp = OnionKeypair {
-                                address,
-                                public_key: pubkey,
-                                expanded_secret,
-                            };
-                            let _ = on_milestone.send(MintMilestone {
-                                matched_len: full_matched,
-                                keypair: kp,
-                            });
-                        } else if global_best > local_best {
-                            local_best = global_best;
-                            needed_chars = (local_best + 1).min(target_len);
-                            (mask64, expected64) = matcher.fast_mask_u64(needed_chars);
-                        }
-                    } else {
-                        local_best = global_best;
-                        needed_chars = (local_best + 1).min(target_len);
-                        (mask64, expected64) = matcher.fast_mask_u64(needed_chars);
+                    let hit = CandidateHit {
+                        seed: &seeds[s],
+                        exact_step,
+                        scalar: &scalar,
+                        pubkey,
+                        matched,
+                    };
+                    if let Some((nb, m, e)) = report_candidate_hit(
+                        matcher,
+                        telemetry,
+                        on_milestone,
+                        &hit,
+                        local_best,
+                        target_len,
+                    ) {
+                        (local_best, mask64, expected64) = (nb, m, e);
                     }
                 }
             }
@@ -261,9 +243,8 @@ fn worker_loop(
                 batch_count = 0;
                 let global_best = telemetry.global_best_len.load(Ordering::Relaxed) as usize;
                 if global_best > local_best {
-                    local_best = global_best;
-                    needed_chars = (local_best + 1).min(target_len);
-                    (mask64, expected64) = matcher.fast_mask_u64(needed_chars);
+                    (local_best, mask64, expected64) =
+                        refresh_fast_mask(matcher, global_best, target_len);
                 }
             }
         }
@@ -282,15 +263,7 @@ mod tests {
 
     #[test]
     fn custom_cached_addition_matches_dalek_compress() {
-        let seed = [9u8; 32];
-        let hash = Sha512::digest(seed);
-        let mut s_bytes = [0u8; 32];
-        s_bytes.copy_from_slice(&hash[..32]);
-        s_bytes[0] &= 248;
-        s_bytes[31] &= 127;
-        s_bytes[31] |= 64;
-
-        let base = Scalar::from_bytes_mod_order(s_bytes);
+        let base = seed_to_scalar(&[9u8; 32]);
         let step_dalek = ED25519_BASEPOINT_POINT * Scalar::from(8u64);
         let step_cached = CachedStep::from_dalek(&step_dalek);
 
@@ -333,14 +306,7 @@ mod tests {
 
     #[test]
     fn dedicated_sq_and_first_u64_be_match_reference() {
-        let seed = [42u8; 32];
-        let hash = Sha512::digest(seed);
-        let mut s_bytes = [0u8; 32];
-        s_bytes.copy_from_slice(&hash[..32]);
-        s_bytes[0] &= 248;
-        s_bytes[31] &= 127;
-        s_bytes[31] |= 64;
-        let pt = ED25519_BASEPOINT_POINT * Scalar::from_bytes_mod_order(s_bytes);
+        let pt = ED25519_BASEPOINT_POINT * seed_to_scalar(&[42u8; 32]);
         let ext = ExtPoint::from_dalek(&pt);
 
         // Verify dedicated sq() matches mul(x, x)

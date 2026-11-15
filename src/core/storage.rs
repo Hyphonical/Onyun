@@ -1,4 +1,4 @@
-//! Atomic Tor v3 `HiddenServiceDir` persistence into `./mints/<target>/`
+//! Atomic Tor v3 `HiddenServiceDir` persistence into `<base_dir>/<target>/`
 //! and database-free resume from existing `hostname` files.
 
 use crate::core::base32::PrefixMatcher;

@@ -2,9 +2,77 @@
 //! point arithmetic, and key-derivation helpers used by `CpuMkEngine` and
 //! `GpuMkEngine`.
 
+use crate::core::base32::PrefixMatcher;
+use crate::core::engine::{MintMilestone, SharedTelemetry};
+use crate::core::onion::{OnionKeypair, derive_address};
 use curve25519_dalek::edwards::EdwardsPoint;
 use curve25519_dalek::scalar::Scalar;
 use sha2::{Digest, Sha512};
+use std::sync::atomic::Ordering;
+use std::sync::mpsc::Sender;
+
+#[inline]
+pub(super) fn seed_to_scalar(seed: &[u8; 32]) -> Scalar {
+    let hash = Sha512::digest(seed);
+    let mut base_scalar_bytes = [0u8; 32];
+    base_scalar_bytes.copy_from_slice(&hash[..32]);
+    base_scalar_bytes[0] &= 248;
+    base_scalar_bytes[31] &= 127;
+    base_scalar_bytes[31] |= 64;
+    Scalar::from_bytes_mod_order(base_scalar_bytes)
+}
+
+#[inline]
+pub(super) fn refresh_fast_mask(
+    matcher: &PrefixMatcher,
+    best_len: usize,
+    target_len: usize,
+) -> (usize, u64, u64) {
+    let needed_chars = (best_len + 1).min(target_len);
+    let (mask64, expected64) = matcher.fast_mask_u64(needed_chars);
+    (best_len, mask64, expected64)
+}
+
+pub(super) struct CandidateHit<'a> {
+    pub(super) seed: &'a [u8; 32],
+    pub(super) exact_step: u64,
+    pub(super) scalar: &'a Scalar,
+    pub(super) pubkey: [u8; 32],
+    pub(super) matched: usize,
+}
+
+pub(super) fn report_candidate_hit(
+    matcher: &PrefixMatcher,
+    telemetry: &SharedTelemetry,
+    on_milestone: &Sender<MintMilestone>,
+    hit: &CandidateHit<'_>,
+    local_best: usize,
+    target_len: usize,
+) -> Option<(usize, u64, u64)> {
+    let global_best = telemetry.global_best_len.load(Ordering::Acquire) as usize;
+    if hit.matched > global_best || (target_len == 52 && hit.matched == 51) {
+        let address = derive_address(&hit.pubkey);
+        let full_matched = matcher.matched_len_hostname(&address);
+        if full_matched > global_best {
+            let expanded_secret = derive_expanded_secret(hit.seed, hit.exact_step, hit.scalar);
+            let kp = OnionKeypair {
+                address,
+                public_key: hit.pubkey,
+                expanded_secret,
+            };
+            let _ = on_milestone.send(MintMilestone {
+                matched_len: full_matched,
+                keypair: kp,
+            });
+            return Some(refresh_fast_mask(matcher, full_matched, target_len));
+        }
+    }
+    if global_best > local_best {
+        Some(refresh_fast_mask(matcher, global_best, target_len))
+    } else {
+        None
+    }
+}
 
 pub(super) fn derive_expanded_secret(seed: &[u8; 32], step: u64, scalar: &Scalar) -> [u8; 64] {
     let mut nonce_hasher = Sha512::new();
@@ -313,6 +381,7 @@ impl Fe {
     }
 
     /// Returns the first 8 canonical bytes in big-endian bit order for fast prefix masking.
+    #[cfg(test)]
     #[inline(always)]
     pub(super) fn first_u64_be(self) -> u64 {
         let mut h = self.0;
@@ -345,6 +414,12 @@ impl Fe {
         let r0 = (h[0] & !mask) | (t0 & mask);
         let r1 = (h[1] & !mask) | (t1 & mask);
         (r0 | (r1 << 51)).swap_bytes()
+    }
+
+    /// Fast uncanonicalized first 8 bytes (big-endian bit order), valid on direct `Fe::mul` outputs.
+    #[inline(always)]
+    pub(super) fn first_u64_be_weak(self) -> u64 {
+        (self.0[0] | (self.0[1] << 51)).swap_bytes()
     }
 }
 
