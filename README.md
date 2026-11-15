@@ -41,10 +41,9 @@ Average time to find a prefix of a given length at a given hashrate.
 
 | Hardware | Engine | Hashrate |
 | :--- | :--- | ---: |
-| AMD Ryzen 7 7700 (13 threads) | CPU | ~96 MH/s |
-| AMD Ryzen 5 5600G (11 threads) | CPU | ~65 MH/s |
-| NVIDIA GeForce RTX 4070 | GPU (WGPU/Vulkan) | ~181 MH/s |
-| NVIDIA GeForce RTX 4060 Laptop | GPU (WGPU/Vulkan) | ~90 MH/s |
+| AMD EPYC 7702P 64-Core Processor @ 8 Cores | CPU | ~50 MH/s |
+| 13th Gen Intel Core i7-13700HX | CPU | ~70 MH/s |
+| NVIDIA GeForce RTX 4060 Laptop | GPU | ~350 MH/s |
 
 *Averages only: the search is random, so you can get lucky or unlucky. Roughly half of runs finish within 0.7× the listed time, and about 95% within 3×. Each extra character multiplies the time by 32.*
 
