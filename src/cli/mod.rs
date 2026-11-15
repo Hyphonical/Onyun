@@ -143,7 +143,14 @@ pub(crate) fn run_mint(args: &MintArgs) -> Result<()> {
         let (progress, _pace, eta) =
             compute_progress(milestones.best_len, target.len(), hashes_since_best, rate);
 
-        render::progress_line(flags, progress, milestones.best_len, target.len(), rate, eta);
+        render::progress_line(
+            flags,
+            progress,
+            milestones.best_len,
+            target.len(),
+            rate,
+            eta,
+        );
     }
 
     cancel.store(true, Ordering::SeqCst);

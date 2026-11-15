@@ -5,6 +5,7 @@ mod auth;
 #[cfg(feature = "desktop")]
 mod desktop;
 mod events;
+mod metrics;
 mod routes;
 mod state;
 
@@ -117,9 +118,24 @@ pub(crate) fn run_ui(args: &UiArgs) -> Result<()> {
 
     let shutdown_state = Arc::clone(&state);
     rt.block_on(async move {
+        #[cfg(unix)]
+        let terminate = async {
+            use tokio::signal::unix::{SignalKind, signal};
+            match signal(SignalKind::terminate()) {
+                Ok(mut sig) => {
+                    sig.recv().await;
+                }
+                Err(_) => std::future::pending::<()>().await,
+            }
+        };
+        #[cfg(not(unix))]
+        let terminate = std::future::pending::<()>();
         axum::serve(listener, router)
             .with_graceful_shutdown(async move {
-                let _ = tokio::signal::ctrl_c().await;
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {},
+                    _ = terminate => {},
+                }
                 shutdown_state.stop_mint();
             })
             .await
@@ -141,6 +157,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         ));
 
     Router::new()
+        .route("/metrics", get(metrics::get_metrics))
         .route("/api/status", get(routes::get_status))
         .route("/api/auth/login", post(routes::post_login))
         .route("/api/auth/logout", post(routes::post_logout))

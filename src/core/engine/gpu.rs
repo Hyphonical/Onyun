@@ -594,7 +594,11 @@ fn coordinator_loop(
             None
         };
 
-        if ctx.device.poll(wgpu::PollType::wait_indefinitely()).is_err() {
+        if ctx
+            .device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .is_err()
+        {
             break;
         }
         if !matches!(cur.rx_map.recv(), Ok(Ok(()))) {
@@ -669,14 +673,16 @@ mod tests {
         if !adapter.features().contains(wgpu::Features::SHADER_INT64) {
             return;
         }
-        let Ok((device, queue)) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("onyun-gpu-test"),
-            required_features: wgpu::Features::SHADER_INT64,
-            required_limits: wgpu::Limits::default(),
-            experimental_features: wgpu::ExperimentalFeatures::disabled(),
-            memory_hints: wgpu::MemoryHints::Performance,
-            trace: wgpu::Trace::Off,
-        })) else {
+        let Ok((device, queue)) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+                label: Some("onyun-gpu-test"),
+                required_features: wgpu::Features::SHADER_INT64,
+                required_limits: wgpu::Limits::default(),
+                experimental_features: wgpu::ExperimentalFeatures::disabled(),
+                memory_hints: wgpu::MemoryHints::Performance,
+                trace: wgpu::Trace::Off,
+            }))
+        else {
             return;
         };
 
@@ -846,8 +852,16 @@ mod tests {
         };
         let results: &[TestOut] = bytemuck::cast_slice(&view);
         for i in 0..N {
-            assert_eq!(words_to_pubkey(&results[i].mul_words), expected_mul[i], "mul mismatch at {i}");
-            assert_eq!(words_to_pubkey(&results[i].sq_words), expected_sq[i], "sq mismatch at {i}");
+            assert_eq!(
+                words_to_pubkey(&results[i].mul_words),
+                expected_mul[i],
+                "mul mismatch at {i}"
+            );
+            assert_eq!(
+                words_to_pubkey(&results[i].sq_words),
+                expected_sq[i],
+                "sq mismatch at {i}"
+            );
         }
     }
 }

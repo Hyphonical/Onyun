@@ -49,11 +49,7 @@ impl MintEngine for CpuMkEngine {
                 }
             }
         }
-        format!(
-            "{} ({} cores)",
-            std::env::consts::ARCH,
-            default_threads()
-        )
+        format!("{} ({} cores)", std::env::consts::ARCH, default_threads())
     }
 
     fn slot_count(&self, cpu_threads: usize) -> usize {

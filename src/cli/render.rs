@@ -307,8 +307,7 @@ impl MilestoneState<'_> {
                 telemetry.record_new_best(self.best_len);
                 self.best_address = Some(milestone.keypair.address.clone());
 
-                if let Err(err) =
-                    save_keypair_atomic(self.out_dir, self.target, &milestone.keypair)
+                if let Err(err) = save_keypair_atomic(self.out_dir, self.target, &milestone.keypair)
                 {
                     failure(self.flags, self.command, &format!("autosave failed: {err}"));
                 } else {
@@ -337,7 +336,13 @@ pub(crate) fn mint_summary(
     avg_rate: f64,
     saved_path: Option<&Path>,
 ) {
-    row(flags, command, "Elapsed", &format_duration(elapsed), Color::Dim);
+    row(
+        flags,
+        command,
+        "Elapsed",
+        &format_duration(elapsed),
+        Color::Dim,
+    );
     row(flags, command, "Speed", &format_rate(avg_rate), Color::Dim);
     if let Some(path) = saved_path {
         row(

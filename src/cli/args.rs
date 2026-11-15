@@ -57,7 +57,9 @@ where
         "-V" | "--version" | "version" => Ok(Command::Version),
         "mint" => parse_mint(iter, flags),
         "ui" => parse_ui(iter, flags),
-        other => bail!("unknown subcommand '{other}' (expected `mint` or `ui`; run `onyun --help`)"),
+        other => {
+            bail!("unknown subcommand '{other}' (expected `mint` or `ui`; run `onyun --help`)")
+        }
     }
 }
 

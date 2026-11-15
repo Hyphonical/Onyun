@@ -321,8 +321,7 @@ impl AppState {
             let mut last_tick = Instant::now();
             let mut ewma = render::EwmaRate::default();
 
-            while !cancel_worker.load(Ordering::Relaxed)
-                && milestones.best_len < target_owned.len()
+            while !cancel_worker.load(Ordering::Relaxed) && milestones.best_len < target_owned.len()
             {
                 if milestones.drain(&rx, &telemetry) {
                     cancel_worker.store(true, Ordering::SeqCst);

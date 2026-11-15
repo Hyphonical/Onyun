@@ -202,5 +202,4 @@ mod tests {
         let matcher2 = PrefixMatcher::new(&bad_prefix);
         assert_eq!(matcher2.matched_len(&pubkey), 5);
     }
-
 }
