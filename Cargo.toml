@@ -1,9 +1,21 @@
 [package]
 name = "onyun"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2024"
 description = "High-speed Tor v3 .onion vanity address minter with CLI, Web UI, and Tauri desktop support"
 license = "AGPL-3.0-only"
+repository = "https://github.com/Hyphonical/Onyun"
+readme = "README.md"
+keywords = ["tor", "onion", "vanity", "ed25519", "cli"]
+categories = ["command-line-utilities", "cryptography"]
+exclude = [
+    ".github/",
+    "assets/",
+    "Dockerfile",
+    "docker-compose.yml",
+    "grafana/",
+    "prometheus.yml",
+]
 
 [features]
 default = ["desktop"]
